@@ -1,0 +1,6 @@
+{
+  "name": "Cozy Chai Tapri 3D",
+  "description": "A relaxing, vibrant 3D roadside Indian tea stall simulation game crafted for easy, stress-free play with tactile spice crushing, chai brewing, and vintage radio events.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
