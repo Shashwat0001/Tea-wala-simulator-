@@ -642,28 +642,29 @@ export default function App() {
 
           {/* =================================================================
               BOTTOM ROW:
-              - Left/Center: Sleek Collapsible 3-Station Counter Bar
-              - Bottom-Right Corner: Compact Customer Order Card (Never covers Tea Maker or Table!)
+              - Bottom-Left Corner: Compact Collapsible 3-Station Menu
+              - Bottom-Right Corner: Compact Customer Order Card
+              Never stacks vertically, keeping the entire table & people 100% visible!
           ================================================================= */}
-          <div className="w-full flex flex-col lg:flex-row items-end justify-between gap-2.5">
-            {/* LEFT / CENTER: Compact Collapsible 3-Station Counter Strip */}
-            <div className="pointer-events-auto w-full lg:flex-1 max-w-[650px] flex flex-col items-start">
+          <div className="w-full flex flex-row items-end justify-between gap-2">
+            {/* BOTTOM-LEFT CORNER: Compact Collapsible 3-Station Counter Menu */}
+            <div className="pointer-events-auto w-[335px] sm:w-[390px] shrink-0 flex flex-col items-start">
               <button
                 type="button"
                 onClick={(e) => {
                   e.currentTarget.blur();
                   setIsDockCollapsed((prev) => !prev);
                 }}
-                className="px-3.5 py-1 rounded-t-xl bg-[#2C160C]/95 hover:bg-[#431E0F] border-2 border-b-0 border-[#F59E0B] text-[#FDE68A] text-xs font-bold tracking-wide cursor-pointer whitespace-nowrap ml-2"
+                className="px-2.5 py-0.5 rounded-t-lg bg-[#2C160C]/95 hover:bg-[#431E0F] border-2 border-b-0 border-[#F59E0B] text-[#FDE68A] text-[11px] font-bold tracking-wide cursor-pointer whitespace-nowrap ml-2"
               >
-                {isDockCollapsed ? '▴ Show Station Buttons' : '▾ Hide Buttons'}
+                {isDockCollapsed ? '▴ Show Buttons' : '▾ Hide Buttons'}
               </button>
 
               {!isDockCollapsed && (
-                <div className="w-full bg-[#2C160C]/95 border-2 border-[#F59E0B] rounded-2xl p-2 shadow-[0_8px_24px_rgba(0,0,0,0.6)]">
+                <div className="w-full bg-[#2C160C]/95 border-2 border-[#F59E0B] rounded-xl p-1.5 shadow-[0_6px_18px_rgba(0,0,0,0.55)]">
                   {/* Compact Single-Row Guided Bar */}
-                  <div className="flex items-center justify-between gap-2 pb-1.5 mb-1.5 border-b border-[#F59E0B]/30 px-1">
-                    <span className="text-xs md:text-sm font-bold text-[#FDE68A] truncate">
+                  <div className="flex items-center justify-between gap-1.5 pb-1 mb-1 border-b border-[#F59E0B]/30 px-1">
+                    <span className="text-[11px] font-bold text-[#FDE68A] truncate">
                       {guided.instruction}
                     </span>
 
@@ -674,7 +675,7 @@ export default function App() {
                         e.currentTarget.blur();
                         handleGuidedNextStep();
                       }}
-                      className={`min-h-[38px] px-3.5 py-1 rounded-lg font-display font-bold text-sm border transition-transform active:scale-[0.98] cursor-pointer whitespace-nowrap shrink-0 ${
+                      className={`min-h-[28px] px-2.5 py-0.5 rounded-md font-display font-bold text-xs border transition-transform active:scale-[0.98] cursor-pointer whitespace-nowrap shrink-0 ${
                         readyToServe
                           ? 'bg-[#15803D] hover:bg-[#166534] text-[#FFFBEB] border-[#86EFAC]'
                           : 'bg-[#D97706] hover:bg-[#B45309] text-[#FFFBEB] border-[#FDE68A]'
@@ -685,7 +686,7 @@ export default function App() {
                   </div>
 
                   {/* 3 Tactile Station Buttons Row */}
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-3 gap-1.5">
                     {/* STATION 1: PREP */}
                     <button
                       type="button"
@@ -695,7 +696,7 @@ export default function App() {
                         handleStation1Crush();
                       }}
                       disabled={st.crushCount >= 3}
-                      className={`min-h-[54px] px-2.5 py-1.5 rounded-xl border-2 flex flex-col items-start justify-center transition-colors cursor-pointer ${
+                      className={`min-h-[42px] px-2 py-1 rounded-lg border flex flex-col items-start justify-center transition-colors cursor-pointer ${
                         st.crushCount >= 3
                           ? 'bg-[#14532D]/80 border-[#4ADE80]/60 text-[#BBF7D0]'
                           : guided.stationNumber === 1
@@ -703,15 +704,15 @@ export default function App() {
                             : 'bg-[#36180C] hover:bg-[#431E0F] border-[#78350F] text-[#FFFBEB]'
                       }`}
                     >
-                      <div className="flex items-center justify-between w-full text-[11px] font-bold text-[#FCD34D]">
-                        <span className="flex items-center gap-1">
-                          <MortarSvgIcon className="w-4 h-4" /> 1. Spices
+                      <div className="flex items-center justify-between w-full text-[10px] font-bold text-[#FCD34D]">
+                        <span className="flex items-center gap-0.5 truncate">
+                          <MortarSvgIcon className="w-3.5 h-3.5 shrink-0" /> 1. Spices
                         </span>
                         <span className="font-mono-num">{st.crushCount}/3</span>
                       </div>
-                      <div className="font-bold text-xs md:text-sm truncate w-full text-left mt-0.5">
+                      <div className="font-bold text-[11px] truncate w-full text-left">
                         {st.crushCount >= 3
-                          ? `✓ ${SPICE_LABELS[st.spiceSelected].hindi} Ready`
+                          ? `✓ ${SPICE_LABELS[st.spiceSelected].hindi}`
                           : `Crush ${SPICE_LABELS[order.spice].hindi}`}
                       </div>
                     </button>
@@ -725,7 +726,7 @@ export default function App() {
                         handleStation2Brew('auto_next');
                       }}
                       disabled={st.isBoiled}
-                      className={`min-h-[54px] px-2.5 py-1.5 rounded-xl border-2 flex flex-col items-start justify-center transition-colors cursor-pointer ${
+                      className={`min-h-[42px] px-2 py-1 rounded-lg border flex flex-col items-start justify-center transition-colors cursor-pointer ${
                         st.isBoiled
                           ? 'bg-[#14532D]/80 border-[#4ADE80]/60 text-[#BBF7D0]'
                           : guided.stationNumber === 2
@@ -733,15 +734,15 @@ export default function App() {
                             : 'bg-[#36180C] hover:bg-[#431E0F] border-[#78350F] text-[#FFFBEB]'
                       }`}
                     >
-                      <div className="flex items-center justify-between w-full text-[11px] font-bold text-[#FCD34D]">
-                        <span className="flex items-center gap-1">
-                          <PatilaStoveSvgIcon className="w-4 h-4" /> 2. Stove
+                      <div className="flex items-center justify-between w-full text-[10px] font-bold text-[#FCD34D]">
+                        <span className="flex items-center gap-0.5 truncate">
+                          <PatilaStoveSvgIcon className="w-3.5 h-3.5 shrink-0" /> 2. Stove
                         </span>
                         <span className="font-mono-num">
                           {st.isBoiled ? '100%' : `${Math.round(st.boilProgress)}%`}
                         </span>
                       </div>
-                      <div className="font-bold text-xs md:text-sm truncate w-full text-left mt-0.5">
+                      <div className="font-bold text-[11px] truncate w-full text-left">
                         {!st.waterAdded
                           ? '+ Add Water'
                           : !st.teaLeavesAdded
@@ -754,7 +755,7 @@ export default function App() {
                                 ? '+ Add Spices'
                                 : !st.isBoiled
                                   ? 'Simmering...'
-                                  : '✓ Chai Boiled'}
+                                  : '✓ Boiled'}
                       </div>
                     </button>
 
@@ -767,7 +768,7 @@ export default function App() {
                         handleStation3PlateOrServe();
                       }}
                       disabled={!st.isBoiled}
-                      className={`min-h-[54px] px-2.5 py-1.5 rounded-xl border-2 flex flex-col items-start justify-center transition-colors cursor-pointer ${
+                      className={`min-h-[42px] px-2 py-1 rounded-lg border flex flex-col items-start justify-center transition-colors cursor-pointer ${
                         !st.isBoiled
                           ? 'bg-[#29130A]/80 border-[#572814] text-[#A88973] cursor-not-allowed'
                           : readyToServe
@@ -775,15 +776,15 @@ export default function App() {
                             : 'bg-[#0F766E] hover:bg-[#0D9488] border-[#99F6E4] text-[#FFFBEB]'
                       }`}
                     >
-                      <div className="flex items-center justify-between w-full text-[11px] font-bold text-[#FCD34D]">
-                        <span className="flex items-center gap-1">
-                          <KulhadTraySvgIcon className="w-4 h-4" /> 3. Tray
+                      <div className="flex items-center justify-between w-full text-[10px] font-bold text-[#FCD34D]">
+                        <span className="flex items-center gap-0.5 truncate">
+                          <KulhadTraySvgIcon className="w-3.5 h-3.5 shrink-0" /> 3. Tray
                         </span>
                         <span className="font-mono-num">
                           {readyToServe ? 'Serve!' : st.pouredCup ? '1/2' : '0/2'}
                         </span>
                       </div>
-                      <div className="font-bold text-xs md:text-sm truncate w-full text-left mt-0.5">
+                      <div className="font-bold text-[11px] truncate w-full text-left">
                         {!st.pouredCup
                           ? `Pour ${CUP_LABELS[order.cup].name}`
                           : !st.platedSnack
@@ -796,34 +797,34 @@ export default function App() {
               )}
             </div>
 
-            {/* BOTTOM-RIGHT CORNER: Compact Customer Order Card (Smallest footprint, never covers table!) */}
+            {/* BOTTOM-RIGHT CORNER: Compact Customer Order Card */}
             <section
               aria-label="Customer Order"
               data-testid="customer-order-card"
-              className="pointer-events-auto w-full sm:w-[320px] lg:w-[335px] shrink-0 bg-[#FDF6E7]/95 border-2 border-[#9A3412] rounded-2xl px-3.5 py-2.5 shadow-[0_8px_20px_rgba(0,0,0,0.5)]"
+              className="pointer-events-auto w-[265px] sm:w-[305px] shrink-0 bg-[#FDF6E7]/95 border-2 border-[#9A3412] rounded-xl px-3 py-2 shadow-[0_6px_18px_rgba(0,0,0,0.5)]"
             >
-              <div className="flex items-baseline justify-between gap-2 border-b border-[#D97706]/30 pb-1 mb-1">
+              <div className="flex items-baseline justify-between gap-1.5 border-b border-[#D97706]/30 pb-0.5 mb-1">
                 <div className="truncate">
-                  <span className="font-display font-bold text-base md:text-lg text-[#2C160C]">
+                  <span className="font-display font-bold text-sm sm:text-base text-[#2C160C]">
                     {order.name}
                   </span>
-                  <span className="text-xs font-semibold text-[#7C2D12] ml-1">
+                  <span className="text-[11px] font-semibold text-[#7C2D12] ml-1">
                     · {order.role}
                   </span>
                 </div>
-                <span className="text-[11px] font-bold text-[#15803D] shrink-0">
-                  Waiting at Counter
+                <span className="text-[10px] font-bold text-[#15803D] shrink-0">
+                  At Counter
                 </span>
               </div>
 
               <p
                 data-testid="customer-dialogue"
-                className="text-sm md:text-[15px] leading-snug font-semibold text-[#231109] line-clamp-2"
+                className="text-xs sm:text-[13px] leading-snug font-semibold text-[#231109] line-clamp-2"
               >
                 “{order.greeting}”
               </p>
 
-              <div className="mt-1.5 pt-1 border-t border-[#D97706]/25 text-xs md:text-[13px] font-bold text-[#7C2D12] truncate">
+              <div className="mt-1 pt-0.5 border-t border-[#D97706]/25 text-[11px] font-bold text-[#7C2D12] truncate">
                 <span>{SPICE_LABELS[order.spice].name}</span>
                 <span className="mx-1" aria-hidden="true">·</span>
                 <span>

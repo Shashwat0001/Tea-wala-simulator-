@@ -236,6 +236,7 @@ export class TapriScene3D {
     }
 
     this.bindEvents();
+    this.handleResize();
     this.startLoop();
   }
 
@@ -1743,7 +1744,10 @@ export class TapriScene3D {
     if (this.disposed) return;
     const width = this.container.clientWidth || window.innerWidth;
     const height = this.container.clientHeight || window.innerHeight;
-    this.camera.aspect = width / height;
+    const aspect = width / Math.max(1, height);
+    this.camera.aspect = aspect;
+    this.camera.fov =
+      aspect < 1.55 ? THREE.MathUtils.clamp(39 * (1.52 / Math.max(0.85, aspect)), 39, 52) : 39;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
   };
@@ -1867,10 +1871,10 @@ export class TapriScene3D {
     } else {
       this.cameraPosTarget.set(
         this.pointerNormalized.x * 0.18,
-        3.42 + this.pointerNormalized.y * 0.06,
-        5.25,
+        3.35 + this.pointerNormalized.y * 0.06,
+        5.45,
       );
-      this.cameraLookTarget.set(this.pointerNormalized.x * 0.08, 1.12, -0.15);
+      this.cameraLookTarget.set(this.pointerNormalized.x * 0.08, 0.88, -0.15);
     }
 
     this.cameraPosCurrent.lerp(this.cameraPosTarget, dampFactor);
