@@ -79,22 +79,27 @@ export interface RadioEventInfo {
   stationName: string;
   announcement: string;
   effectSummary: string;
+  tickerText: string;
 }
 
 export const RADIO_EVENTS: Record<RadioEventId, RadioEventInfo> = {
   normal: {
     id: 'normal',
-    title: 'Pleasant Morning Breeze',
+    title: 'Classic 70s Melodies',
     stationName: 'All India Radio · Vividh Bharati',
-    announcement: 'Good morning! A pleasant golden breeze blows across the neighborhood market today.',
+    announcement: 'Good morning! Classic 70s melodies and a pleasant golden breeze float across the neighborhood.',
     effectSummary: 'Classic Milk Chai, Ginger & Cardamom favourites',
+    tickerText:
+      '📻 Now playing: Classic 70s Melodies on Vividh Bharati · Pleasant morning breeze across the stall · Customers waiting patiently with zero rush...',
   },
   monsoon: {
     id: 'monsoon',
-    title: 'Monsoon Showers Alert',
+    title: 'Gentle Monsoon Rain',
     stationName: 'Akashvani Weather Desk',
-    announcement: 'Heavy monsoon rains expected today! Everyone is craving hot Adrak Chai and crispy snacks.',
+    announcement: 'Gentle monsoon rain is falling outside the stall! Everyone is craving hot Adrak Chai and crispy snacks.',
     effectSummary: 'Extra Ginger Chai & Pakoras · +5 Weather Tip Bonus',
+    tickerText:
+      '📻 Weather: Gentle monsoon rain expected across the bazaar · Neighbors craving steaming Fresh Ginger Chai & hot Pakoras (+5 Coin Tip Bonus!)...',
   },
   milkman_delayed: {
     id: 'milkman_delayed',
@@ -102,13 +107,17 @@ export const RADIO_EVENTS: Record<RadioEventId, RadioEventInfo> = {
     stationName: 'Mohalla Morning Bulletin',
     announcement: 'Local dairy delivery is running late at the railway crossing! Serving aromatic Black & Lemon Chai.',
     effectSummary: 'Black & Lemon Spiced Tea only (No Milk needed)',
+    tickerText:
+      '📻 Mohalla Bulletin: Milkman cycle delayed at the railway crossing · Serving fragrant Tulsi & Lemon Black Tea today (+4 Coin Tip Bonus!)...',
   },
   diwali: {
     id: 'diwali',
-    title: 'Shubh Deepawali Festival!',
+    title: 'Warm Evening Glow',
     stationName: 'Festive Utsav Broadcast',
-    announcement: 'Happy Diwali across the bazaar! Lanterns are glowing and neighbors are celebrating generously.',
+    announcement: 'Warm evening lanterns and marigold lights are glowing across the street! Neighbors are celebrating generously.',
     effectSummary: '2x Double Coins on all orders & festive sweets!',
+    tickerText:
+      '📻 Evening Broadcast: Warm festive lanterns & classic ghazals on the airwaves · 2x Double Coins on every cup served tonight!...',
   },
 };
 
@@ -572,6 +581,26 @@ export function isOrderReadyToServe(station: StationProgress): boolean {
     station.pouredCup !== null &&
     station.platedSnack !== null
   );
+}
+
+export function hasAnyStationProgress(station: StationProgress): boolean {
+  return (
+    station.crushCount > 0 ||
+    station.waterAdded ||
+    station.teaLeavesAdded ||
+    station.milkOrLemonAdded ||
+    station.spicesInPot ||
+    station.boilProgress > 0 ||
+    station.pouredCup !== null ||
+    station.platedSnack !== null
+  );
+}
+
+export function resetCurrentPreparation(state: TapriGameState): TapriGameState {
+  return {
+    ...state,
+    station: createInitialStation(state.currentCustomer),
+  };
 }
 
 export function calculateOrderCoins(

@@ -31,13 +31,30 @@ export function TitleEmblemSvg() {
         strokeDasharray="6 4"
       />
 
-      {/* Left Decorative Steaming Kulhad Icon */}
-      <g transform="translate(36, 44)">
-        {/* Steam waves */}
+      {/* Left Decorative Steaming Kulhad Teacup Icon with Continuous CSS Steam */}
+      <g transform="translate(36, 48)">
+        {/* Continuous CSS-animated steam wisps */}
         <path
-          d="M18 6 C14 -2, 24 -6, 20 -14 M30 8 C26 0, 36 -4, 32 -12"
+          className="steam-wisp-1"
+          d="M15 8 C11 -2, 21 -8, 17 -18"
+          stroke="#FFFBEB"
+          strokeWidth="3.2"
+          strokeLinecap="round"
+          fill="none"
+        />
+        <path
+          className="steam-wisp-2"
+          d="M25 10 C21 0, 31 -6, 27 -16"
           stroke="#FDE68A"
-          strokeWidth="3"
+          strokeWidth="3.2"
+          strokeLinecap="round"
+          fill="none"
+        />
+        <path
+          className="steam-wisp-3"
+          d="M35 8 C31 -2, 41 -8, 37 -18"
+          stroke="#FFFBEB"
+          strokeWidth="2.8"
           strokeLinecap="round"
           fill="none"
         />
@@ -52,12 +69,21 @@ export function TitleEmblemSvg() {
         <path d="M11 26 L39 26 M13 40 L37 40" stroke="#FDE68A" strokeWidth="2" />
       </g>
 
-      {/* Right Decorative Brass Teapot Icon */}
-      <g transform="translate(432, 44)">
+      {/* Right Decorative Brass Teapot Icon with Continuous CSS Steam */}
+      <g transform="translate(432, 48)">
         <path
-          d="M25 6 C21 -2, 31 -6, 27 -14"
+          className="steam-wisp-2"
+          d="M22 6 C18 -4, 28 -10, 24 -20"
+          stroke="#FFFBEB"
+          strokeWidth="3.2"
+          strokeLinecap="round"
+          fill="none"
+        />
+        <path
+          className="steam-wisp-1"
+          d="M32 8 C28 -2, 38 -8, 34 -18"
           stroke="#FDE68A"
-          strokeWidth="3"
+          strokeWidth="2.8"
           strokeLinecap="round"
           fill="none"
         />

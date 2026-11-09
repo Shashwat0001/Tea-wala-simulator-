@@ -12,6 +12,8 @@ import {
   calculateOrderCoins,
   purchaseUpgrade,
   generateCustomerOrder,
+  resetCurrentPreparation,
+  hasAnyStationProgress,
 } from './rules';
 
 test('Station 1 -> Station 2 -> Station 3 full preparation and serving flow', () => {
@@ -85,4 +87,16 @@ test('Upgrade shop unlocks items and deducts coins safely', () => {
   assert.equal(resDuplicate.success, false);
   const resTooExpensive = purchaseUpgrade(res1.nextState, 'marigold_lights'); // costs 100
   assert.equal(resTooExpensive.success, false);
+});
+
+test('Empty Tray / Undo clears current preparation with zero penalty', () => {
+  let state = createInitialGameState({ coins: 40 });
+  assert.equal(hasAnyStationProgress(state.station), false);
+  state = crushSpiceStep(state);
+  state = addBrewIngredientStep(state, 'water');
+  assert.equal(hasAnyStationProgress(state.station), true);
+
+  const cleared = resetCurrentPreparation(state);
+  assert.equal(hasAnyStationProgress(cleared.station), false);
+  assert.equal(cleared.coins, 40);
 });

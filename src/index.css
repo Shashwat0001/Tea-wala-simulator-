@@ -49,3 +49,91 @@
   -webkit-text-stroke: 3px #231109;
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
 }
+
+/* Continuous CSS-animated steam effect rising from the teacup on the Title Screen */
+@keyframes cozySteamRise {
+  0% {
+    transform: translateY(6px) translateX(0px) scale(0.85);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.78;
+  }
+  70% {
+    transform: translateY(-18px) translateX(4px) scale(1.08);
+    opacity: 0.55;
+  }
+  100% {
+    transform: translateY(-34px) translateX(-3px) scale(1.25);
+    opacity: 0;
+  }
+}
+
+.steam-wisp-1 {
+  animation: cozySteamRise 3.4s ease-in-out infinite;
+}
+
+.steam-wisp-2 {
+  animation: cozySteamRise 3.4s ease-in-out 1.1s infinite;
+}
+
+.steam-wisp-3 {
+  animation: cozySteamRise 3.4s ease-in-out 2.2s infinite;
+}
+
+/* Gentle celebratory floating "Perfect!" & golden coin rise animation */
+@keyframes floatUpSlow {
+  0% {
+    transform: translateY(12px) scale(0.92);
+    opacity: 0;
+  }
+  18% {
+    transform: translateY(0px) scale(1.03);
+    opacity: 1;
+  }
+  75% {
+    transform: translateY(-28px) scale(1);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateY(-48px) scale(0.96);
+    opacity: 0;
+  }
+}
+
+.animate-float-perfect {
+  animation: floatUpSlow 2.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Nostalgic Radio gentle scrolling marquee ticker */
+@keyframes radioMarquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.radio-ticker-scroll {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: radioMarquee 28s linear infinite;
+}
+
+/* Soft glowing hover outline for forgiving, accessible controls */
+.cozy-interactive-glow {
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.cozy-interactive-glow:hover:not(:disabled) {
+  box-shadow:
+    0 0 0 3px rgba(253, 224, 71, 0.55),
+    0 0 18px rgba(250, 204, 21, 0.65);
+  border-color: #fde047;
+}
+

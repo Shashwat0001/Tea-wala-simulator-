@@ -131,10 +131,12 @@ export class TapriScene3D {
   private marigoldGarlandGroup!: THREE.Group;
   private counterSamosaDisplay!: THREE.Group;
 
-  // Active Station Guide Ring
+  // Active Station Guide Ring & Soft Hover Glow Ring
   private guideRingMesh!: THREE.Mesh;
   private guideRingTargetX = -2.1;
   private guideRingTargetZ = 0.35;
+  private hoverRingMesh!: THREE.Mesh;
+  private hoveredStation: InteractiveStationTarget | null = null;
 
   // 1. Tea Maker (Chaiwala) behind the counter
   private teaMakerRig!: CharacterRig;
@@ -207,9 +209,9 @@ export class TapriScene3D {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xf6c28b);
-    this.scene.fog = new THREE.FogExp2(0xf6c28b, 0.02);
+    this.scene.fog = new THREE.FogExp2(0xf6c28b, 0.007);
 
-    this.camera = new THREE.PerspectiveCamera(46, width / height, 0.1, 80);
+    this.camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 80);
     this.camera.position.copy(this.cameraPosCurrent);
     this.camera.lookAt(this.cameraLookCurrent);
 
@@ -546,6 +548,23 @@ export class TapriScene3D {
     this.guideRingMesh.position.set(-2.05, 1.125, 0.32);
     counterGroup.add(this.guideRingMesh);
 
+    // Soft Glowing Hover Outline Ring when hovering over any 3D interactive station
+    const hoverGeo = new THREE.RingGeometry(0.68, 0.92, 36);
+    hoverGeo.rotateX(-Math.PI / 2);
+    const hoverMat = new THREE.MeshBasicMaterial({
+      color: 0xfef08a,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.72,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    this.hoverRingMesh = new THREE.Mesh(hoverGeo, hoverMat);
+    this.hoverRingMesh.position.set(0, 1.128, 0.32);
+    this.hoverRingMesh.visible = false;
+    counterGroup.add(this.hoverRingMesh);
+
     // Marigold Flower Garland (Genda Phool Toran) & Festive Lanterns Group
     this.marigoldGarlandGroup = new THREE.Group();
     const marigoldOrange = new THREE.MeshStandardMaterial({
@@ -703,10 +722,10 @@ export class TapriScene3D {
     });
 
     const hitProxy = new THREE.Mesh(
-      new THREE.BoxGeometry(1.45, 0.9, 1.15),
+      new THREE.BoxGeometry(1.75, 1.15, 1.35),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
-    hitProxy.position.y = 0.4;
+    hitProxy.position.y = 0.48;
     hitProxy.userData.stationTarget = 'station_mortar' as InteractiveStationTarget;
     this.mortarGroup.add(hitProxy);
     this.interactables.push(hitProxy);
@@ -847,10 +866,10 @@ export class TapriScene3D {
     this.stoveGroup.add(sugarBowl);
 
     const hitProxy = new THREE.Mesh(
-      new THREE.BoxGeometry(1.5, 0.95, 1.15),
+      new THREE.BoxGeometry(1.75, 1.15, 1.35),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
-    hitProxy.position.y = 0.45;
+    hitProxy.position.y = 0.5;
     hitProxy.userData.stationTarget = 'station_stove' as InteractiveStationTarget;
     this.stoveGroup.add(hitProxy);
     this.interactables.push(hitProxy);
@@ -1108,10 +1127,10 @@ export class TapriScene3D {
     }
 
     const radioProxy = new THREE.Mesh(
-      new THREE.BoxGeometry(0.9, 0.85, 0.55),
+      new THREE.BoxGeometry(1.15, 1.05, 0.8),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
-    radioProxy.position.y = 0.4;
+    radioProxy.position.y = 0.45;
     radioProxy.userData.stationTarget = 'station_radio' as InteractiveStationTarget;
     this.radioGroup.add(radioProxy);
     this.interactables.push(radioProxy);
@@ -1527,6 +1546,24 @@ export class TapriScene3D {
     }
   }
 
+  // Slow-rising, gentle steam particle system for simmering & poured chai
+  public spawnGentleSteam(x: number, y: number, z: number): void {
+    const slot = this.particles[this.particleIndex];
+    this.particleIndex = (this.particleIndex + 1) % this.particleCount;
+    slot.active = true;
+    slot.x = x + (Math.random() - 0.5) * 0.24;
+    slot.y = y;
+    slot.z = z + (Math.random() - 0.5) * 0.24;
+    slot.vx = (Math.random() - 0.5) * 0.12;
+    slot.vy = 0.42 + Math.random() * 0.22; // Slow, unhurried rising steam
+    slot.vz = (Math.random() - 0.5) * 0.12;
+    slot.age = 0;
+    slot.maxAge = 1.65 + Math.random() * 0.55;
+    slot.scaleStart = 0.55;
+    slot.scaleEnd = 1.45;
+    slot.colorHex = 0xfffbeb;
+  }
+
   public triggerMortarPoundEffect(crushCount: number): void {
     this.mortarCrushAnim = 1.0;
     this.mortarWobble = 1.0;
@@ -1746,8 +1783,13 @@ export class TapriScene3D {
     const height = this.container.clientHeight || window.innerHeight;
     const aspect = width / Math.max(1, height);
     this.camera.aspect = aspect;
-    this.camera.fov =
-      aspect < 1.55 ? THREE.MathUtils.clamp(39 * (1.52 / Math.max(0.85, aspect)), 39, 52) : 39;
+    if (aspect < 0.95) {
+      this.camera.fov = 58;
+    } else if (aspect < 1.45) {
+      this.camera.fov = 46;
+    } else {
+      this.camera.fov = 39;
+    }
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
   };
@@ -1757,6 +1799,23 @@ export class TapriScene3D {
     if (rect.width <= 0 || rect.height <= 0) return;
     this.pointerNormalized.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNormalized.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    if (this.mode === 'playing') {
+      this._vec2.set(this.pointerNormalized.x, this.pointerNormalized.y);
+      this.raycaster.setFromCamera(this._vec2, this.camera);
+      const hits = this.raycaster.intersectObjects(this.interactables, false);
+      if (hits.length > 0) {
+        const target = hits[0].object.userData.stationTarget as InteractiveStationTarget | undefined;
+        this.hoveredStation = target ?? null;
+        this.renderer.domElement.style.cursor = target ? 'pointer' : 'default';
+      } else {
+        this.hoveredStation = null;
+        this.renderer.domElement.style.cursor = 'default';
+      }
+    } else {
+      this.hoveredStation = null;
+      this.renderer.domElement.style.cursor = 'default';
+    }
   };
 
   private handlePointerDown = (e: PointerEvent): void => {
@@ -1859,22 +1918,37 @@ export class TapriScene3D {
     }
     const simDt = this.hitstopTimer > 0 ? dt * 0.15 : dt;
 
-    // 1. Camera Choreography
+    // 1. Responsive Camera Choreography (Fits full 7.5-unit counter on both portrait phones & wide desktops)
     const dampFactor = 1 - Math.exp(-5.5 * dt);
+    const aspect = this.camera.aspect || 1.5;
+    const halfFovTan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5));
+    // Ensure horizontal half-span of 3.78 world units always fits inside the screen width
+    const minDistForWidth = 3.78 / (halfFovTan * Math.max(0.42, aspect));
+    const baseDistZ = Math.max(5.45, minDistForWidth);
+    const isPortrait = aspect < 0.95;
+
     if (this.mode === 'title') {
       this.cameraPosTarget.set(
-        Math.sin(elapsed * 0.35) * 0.9,
-        3.4 + Math.cos(elapsed * 0.25) * 0.1,
-        5.35 + Math.sin(elapsed * 0.2) * 0.2,
+        Math.sin(elapsed * 0.35) * (isPortrait ? 0.45 : 0.9),
+        (isPortrait ? 1.15 + baseDistZ * 0.33 : 3.4) + Math.cos(elapsed * 0.25) * 0.1,
+        baseDistZ + Math.sin(elapsed * 0.2) * 0.2,
       );
-      this.cameraLookTarget.set(Math.sin(elapsed * 0.35) * 0.25, 1.25, -0.15);
+      this.cameraLookTarget.set(
+        Math.sin(elapsed * 0.35) * 0.2,
+        isPortrait ? 0.55 : 1.25,
+        -0.15,
+      );
     } else {
       this.cameraPosTarget.set(
-        this.pointerNormalized.x * 0.18,
-        3.35 + this.pointerNormalized.y * 0.06,
-        5.45,
+        this.pointerNormalized.x * (isPortrait ? 0.08 : 0.18),
+        (isPortrait ? 1.15 + baseDistZ * 0.33 : 3.35) + this.pointerNormalized.y * 0.06,
+        baseDistZ,
       );
-      this.cameraLookTarget.set(this.pointerNormalized.x * 0.08, 0.88, -0.15);
+      this.cameraLookTarget.set(
+        this.pointerNormalized.x * 0.06,
+        isPortrait ? 0.18 : 0.88,
+        -0.15,
+      );
     }
 
     this.cameraPosCurrent.lerp(this.cameraPosTarget, dampFactor);
@@ -1896,7 +1970,7 @@ export class TapriScene3D {
     );
     this.camera.lookAt(this.cameraLookCurrent);
 
-    // 2. Guide Ring Smooth Interpolation
+    // 2. Guide Ring & Soft Glowing Hover Ring Interpolation
     this.guideRingMesh.position.x = THREE.MathUtils.lerp(
       this.guideRingMesh.position.x,
       this.guideRingTargetX,
@@ -1910,6 +1984,30 @@ export class TapriScene3D {
     const ringScale = 1 + Math.sin(elapsed * 4.0) * 0.05;
     this.guideRingMesh.scale.setScalar(ringScale);
     this.guideRingMesh.visible = this.mode === 'playing';
+
+    if (this.mode === 'playing' && this.hoveredStation) {
+      this.hoverRingMesh.visible = true;
+      let hx = 0;
+      let hz = 0.32;
+      if (this.hoveredStation === 'station_mortar') {
+        hx = -2.05;
+        hz = 0.32;
+      } else if (this.hoveredStation === 'station_stove') {
+        hx = 0.0;
+        hz = 0.26;
+      } else if (this.hoveredStation === 'station_tray' || this.hoveredStation === 'customer') {
+        hx = 2.05;
+        hz = 0.34;
+      } else if (this.hoveredStation === 'station_radio') {
+        hx = -3.15;
+        hz = -0.22;
+      }
+      this.hoverRingMesh.position.x = hx;
+      this.hoverRingMesh.position.z = hz;
+      this.hoverRingMesh.scale.setScalar(1.06 + Math.sin(elapsed * 5.0) * 0.04);
+    } else {
+      this.hoverRingMesh.visible = false;
+    }
 
     // 3. Tea Maker (Chaiwala) Movement & Working Animation behind the counter
     if (this.teaMakerWorkTimer > 0) {
@@ -2061,8 +2159,11 @@ export class TapriScene3D {
       }
     });
 
-    if (showBubbles && Math.random() < 0.22) {
-      this.spawnParticles(0, 1.68, 0.26, 1, 0xfffbeb, 0.35, 0.9);
+    if (showBubbles && Math.random() < 0.32) {
+      this.spawnGentleSteam(0, 1.66, 0.26);
+    }
+    if (this.cupLiquidMesh.visible && Math.random() < 0.2) {
+      this.spawnGentleSteam(1.79, 1.48, 0.38);
     }
 
     // 7. Station 3 Pour Stream & Tray Serve Slide
