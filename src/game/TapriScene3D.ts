@@ -57,6 +57,7 @@ export class TapriScene3D {
   private frameId: number = 0;
   private disposed: boolean = false;
   private clock: THREE.Clock;
+  private resizeObserver: ResizeObserver | null = null;
 
   // Camera choreography — elevated clear angle showing full tabletop, Tea Maker, and walking Customers
   private mode: 'title' | 'playing' | 'paused' | 'gameover' = 'title';
@@ -1773,25 +1774,91 @@ export class TapriScene3D {
 
   private bindEvents(): void {
     window.addEventListener('resize', this.handleResize);
+    window.visualViewport?.addEventListener('resize', this.handleResize);
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => {
+        this.handleResize();
+      });
+      this.resizeObserver.observe(this.container);
+    }
     window.addEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
   }
 
+  private computeCameraTargets(elapsed: number): void {
+    const aspect = this.camera.aspect || 1.5;
+    const halfFovTan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5));
+    // Ensure full 8.5-unit tabletop & customer span (-4.25 to +4.25) at the front plane (z = +0.90) fits inside any screen width
+    const minDistFromFrontPlane = 4.25 / (halfFovTan * Math.max(0.36, aspect));
+    const baseDistZ = Math.max(5.55, 0.9 + minDistFromFrontPlane);
+    const isPortrait = aspect < 1.05;
+
+    if (this.mode === 'title') {
+      this.cameraPosTarget.set(
+        Math.sin(elapsed * 0.35) * (isPortrait ? 0.35 : 0.9),
+        (isPortrait ? 0.85 + baseDistZ * 0.31 : 3.4) + Math.cos(elapsed * 0.25) * 0.08,
+        baseDistZ + Math.sin(elapsed * 0.2) * 0.18,
+      );
+      this.cameraLookTarget.set(
+        Math.sin(elapsed * 0.35) * 0.15,
+        isPortrait ? 0.45 : 1.25,
+        -0.15,
+      );
+    } else {
+      this.cameraPosTarget.set(
+        this.pointerNormalized.x * (isPortrait ? 0.06 : 0.18),
+        (isPortrait ? 0.8 + baseDistZ * 0.31 : 3.35) + this.pointerNormalized.y * 0.05,
+        baseDistZ,
+      );
+      this.cameraLookTarget.set(
+        this.pointerNormalized.x * 0.05,
+        isPortrait ? 0.22 : 0.88,
+        -0.15,
+      );
+    }
+  }
+
   private handleResize = (): void => {
     if (this.disposed) return;
-    const width = this.container.clientWidth || window.innerWidth;
-    const height = this.container.clientHeight || window.innerHeight;
-    const aspect = width / Math.max(1, height);
+    const rect = this.container.getBoundingClientRect();
+    const width = Math.max(
+      1,
+      Math.round(
+        rect.width ||
+          this.container.clientWidth ||
+          window.visualViewport?.width ||
+          window.innerWidth,
+      ),
+    );
+    const height = Math.max(
+      1,
+      Math.round(
+        rect.height ||
+          this.container.clientHeight ||
+          window.visualViewport?.height ||
+          window.innerHeight,
+      ),
+    );
+    const aspect = width / height;
     this.camera.aspect = aspect;
-    if (aspect < 0.95) {
-      this.camera.fov = 58;
+    if (aspect < 0.72) {
+      this.camera.fov = 56;
+    } else if (aspect < 1.05) {
+      this.camera.fov = 50;
     } else if (aspect < 1.45) {
-      this.camera.fov = 46;
+      this.camera.fov = 45;
     } else {
       this.camera.fov = 39;
     }
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(width, height);
+    this.renderer.setSize(width, height, true);
+
+    // Snap camera immediately on resize so mobile Chrome & tablets frame the full stall on Frame 1
+    this.computeCameraTargets(this.clock.getElapsedTime());
+    this.cameraPosCurrent.copy(this.cameraPosTarget);
+    this.cameraLookCurrent.copy(this.cameraLookTarget);
+    this.camera.position.copy(this.cameraPosCurrent);
+    this.camera.lookAt(this.cameraLookCurrent);
   };
 
   private handlePointerMove = (e: PointerEvent): void => {
@@ -1918,38 +1985,9 @@ export class TapriScene3D {
     }
     const simDt = this.hitstopTimer > 0 ? dt * 0.15 : dt;
 
-    // 1. Responsive Camera Choreography (Fits full 7.5-unit counter on both portrait phones & wide desktops)
+    // 1. Responsive Camera Choreography (Fits full 8.5-unit counter on portrait phones, tablets & desktops)
     const dampFactor = 1 - Math.exp(-5.5 * dt);
-    const aspect = this.camera.aspect || 1.5;
-    const halfFovTan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5));
-    // Ensure horizontal half-span of 3.78 world units always fits inside the screen width
-    const minDistForWidth = 3.78 / (halfFovTan * Math.max(0.42, aspect));
-    const baseDistZ = Math.max(5.45, minDistForWidth);
-    const isPortrait = aspect < 0.95;
-
-    if (this.mode === 'title') {
-      this.cameraPosTarget.set(
-        Math.sin(elapsed * 0.35) * (isPortrait ? 0.45 : 0.9),
-        (isPortrait ? 1.15 + baseDistZ * 0.33 : 3.4) + Math.cos(elapsed * 0.25) * 0.1,
-        baseDistZ + Math.sin(elapsed * 0.2) * 0.2,
-      );
-      this.cameraLookTarget.set(
-        Math.sin(elapsed * 0.35) * 0.2,
-        isPortrait ? 0.55 : 1.25,
-        -0.15,
-      );
-    } else {
-      this.cameraPosTarget.set(
-        this.pointerNormalized.x * (isPortrait ? 0.08 : 0.18),
-        (isPortrait ? 1.15 + baseDistZ * 0.33 : 3.35) + this.pointerNormalized.y * 0.06,
-        baseDistZ,
-      );
-      this.cameraLookTarget.set(
-        this.pointerNormalized.x * 0.06,
-        isPortrait ? 0.18 : 0.88,
-        -0.15,
-      );
-    }
+    this.computeCameraTargets(elapsed);
 
     this.cameraPosCurrent.lerp(this.cameraPosTarget, dampFactor);
     this.cameraLookCurrent.lerp(this.cameraLookTarget, dampFactor);
@@ -2270,6 +2308,11 @@ export class TapriScene3D {
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
     window.removeEventListener('resize', this.handleResize);
+    window.visualViewport?.removeEventListener('resize', this.handleResize);
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
     window.removeEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.renderer.dispose();

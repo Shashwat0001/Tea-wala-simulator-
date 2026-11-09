@@ -17,10 +17,15 @@
   body,
   #root {
     width: 100%;
+    max-width: 100vw;
     height: 100%;
+    height: 100dvh;
     margin: 0;
     padding: 0;
     overflow: hidden;
+    position: fixed;
+    inset: 0;
+    touch-action: manipulation;
     background-color: #2b1810;
     color: #2c160c;
     font-family: var(--font-sans);

@@ -504,36 +504,36 @@ export default function App() {
       )}
 
       {/* =====================================================================
-          2. PLAYING HUD (Responsive for both Mobile Portrait & Desktop)
+          2. PLAYING HUD (Responsive for Mobile Phones, Tablets & Desktops)
       ===================================================================== */}
       {shellMode === 'playing' && (
-        <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-2 sm:p-3">
-          {/* TOP PERIMETER BAR: Wraps cleanly on narrow mobile phones so nothing is ever cut off */}
-          <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 w-full">
+        <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-1.5 sm:p-3 w-full max-w-full overflow-hidden">
+          {/* TOP PERIMETER BAR: Fits on a single compact row on 360px phones & wraps cleanly on 320px */}
+          <div className="flex flex-wrap items-center justify-between gap-1 sm:gap-2 w-full max-w-full">
             {/* Top-Left Cluster: Gullak Coin Jar & Day Progress */}
-            <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2.5 bg-[#2C160C]/95 border-2 border-[#F59E0B] rounded-full px-3 sm:px-4 py-1 sm:py-1.5 min-h-[44px] sm:min-h-[58px] shadow-[0_4px_14px_rgba(0,0,0,0.45)]">
-              <GullakCoinSvgIcon className="w-6 h-6 sm:w-8 sm:h-8 shrink-0" />
+            <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2.5 bg-[#2C160C]/95 border-2 border-[#F59E0B] rounded-full px-2.5 sm:px-4 py-1 sm:py-1.5 min-h-[40px] sm:min-h-[54px] shadow-[0_4px_14px_rgba(0,0,0,0.45)] shrink-0">
+              <GullakCoinSvgIcon className="w-5 h-5 sm:w-8 sm:h-8 shrink-0" />
               <div className="flex flex-col">
-                <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[#FCD34D] leading-none">
+                <span className="text-[9px] sm:text-xs font-bold uppercase tracking-wider text-[#FCD34D] leading-none">
                   Coins
                 </span>
                 <span
                   data-testid="hud-coins"
-                  className="font-mono-num text-base sm:text-2xl font-bold text-[#FFFBEB] leading-tight"
+                  className="font-mono-num text-sm sm:text-2xl font-bold text-[#FFFBEB] leading-tight"
                 >
                   {Math.round(gameState.coins)}
                 </span>
               </div>
 
-              <div className="h-6 sm:h-7 w-[1px] bg-[#F59E0B]/40 mx-0.5 sm:mx-1" />
+              <div className="h-5 sm:h-7 w-[1px] bg-[#F59E0B]/40 mx-0.5 sm:mx-1" />
 
               <div className="flex flex-col">
-                <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[#FCD34D] leading-none">
+                <span className="text-[9px] sm:text-xs font-bold uppercase tracking-wider text-[#FCD34D] leading-none">
                   Day {gameState.day}
                 </span>
                 <span
                   data-testid="hud-served"
-                  className="font-mono-num text-sm sm:text-xl font-bold text-[#FFFBEB] leading-tight"
+                  className="font-mono-num text-xs sm:text-xl font-bold text-[#FFFBEB] leading-tight"
                 >
                   {gameState.customersServedToday}/{gameState.customersPerDay}
                 </span>
@@ -541,7 +541,7 @@ export default function App() {
             </div>
 
             {/* Top-Right Cluster: Vintage Radio Event + Decorate/Shop + Music + Mute + Pause */}
-            <div className="pointer-events-auto flex items-center gap-1 sm:gap-2">
+            <div className="pointer-events-auto flex items-center justify-end gap-1 sm:gap-1.5 min-w-0">
               <button
                 type="button"
                 onClick={(e) => {
@@ -549,16 +549,16 @@ export default function App() {
                   handleRadioTuneClick();
                 }}
                 title="Click to tune Nostalgic Radio weather/festival broadcast"
-                className="cozy-interactive-glow flex items-center gap-1.5 sm:gap-2 bg-[#2C160C]/95 hover:bg-[#3E1F10] border-2 border-[#F59E0B] rounded-full px-2.5 sm:px-4 py-1 sm:py-1.5 min-h-[42px] sm:min-h-[58px] text-left shadow-[0_4px_14px_rgba(0,0,0,0.45)] cursor-pointer max-w-[125px] sm:max-w-[235px]"
+                className="cozy-interactive-glow flex items-center gap-1 sm:gap-2 bg-[#2C160C]/95 hover:bg-[#3E1F10] border-2 border-[#F59E0B] rounded-full px-2 sm:px-3.5 py-1 sm:py-1.5 min-h-[38px] sm:min-h-[54px] text-left shadow-[0_4px_14px_rgba(0,0,0,0.45)] cursor-pointer max-w-[92px] sm:max-w-[180px] md:max-w-[235px] min-w-0"
               >
-                <VintageRadioSvgIcon className="w-5 h-5 sm:w-7 sm:h-7 shrink-0" />
-                <div className="overflow-hidden">
-                  <div className="hidden sm:block text-[10px] font-bold uppercase tracking-wider text-[#FCD34D] truncate">
+                <VintageRadioSvgIcon className="w-4 h-4 sm:w-7 sm:h-7 shrink-0" />
+                <div className="overflow-hidden min-w-0">
+                  <div className="hidden md:block text-[10px] font-bold uppercase tracking-wider text-[#FCD34D] truncate">
                     {radioInfo.stationName}
                   </div>
                   <div
                     data-testid="radio-event-title"
-                    className="text-[11px] sm:text-base font-bold text-[#FFFBEB] truncate"
+                    className="text-[10px] sm:text-sm md:text-base font-bold text-[#FFFBEB] truncate"
                   >
                     {radioInfo.title}
                   </div>
@@ -574,7 +574,7 @@ export default function App() {
                   setIsShopOpen(true);
                 }}
                 aria-label="Decorate Stall and Open Upgrade Shop"
-                className="cozy-interactive-glow h-10 sm:min-h-[58px] sm:min-w-[84px] px-2.5 sm:px-4 rounded-full bg-[#D97706] hover:bg-[#B45309] border-2 border-[#FDE68A] text-[#FFFBEB] font-bold text-xs sm:text-base flex flex-col items-center justify-center shadow-md cursor-pointer whitespace-nowrap"
+                className="cozy-interactive-glow h-9 sm:min-h-[54px] px-2 sm:px-3.5 rounded-full bg-[#D97706] hover:bg-[#B45309] border-2 border-[#FDE68A] text-[#FFFBEB] font-bold text-[11px] sm:text-base flex flex-col items-center justify-center shadow-md cursor-pointer whitespace-nowrap shrink-0"
               >
                 <span>Decorate</span>
                 <span className="hidden sm:inline text-[10px] text-[#FEF08A] leading-none">
@@ -592,14 +592,14 @@ export default function App() {
                   handleToggleMusic();
                 }}
                 title="Toggle Gentle Background Music"
-                className={`cozy-interactive-glow h-10 sm:min-h-[58px] sm:min-w-[60px] px-2 sm:px-3 rounded-full border-2 flex flex-col items-center justify-center shadow-md cursor-pointer ${
+                className={`cozy-interactive-glow h-9 w-9 sm:w-auto sm:min-h-[54px] sm:min-w-[54px] px-1.5 sm:px-2.5 rounded-full border-2 flex flex-col items-center justify-center shadow-md cursor-pointer shrink-0 ${
                   isMusicOn && !isMuted
                     ? 'bg-[#431E0F] hover:bg-[#572814] border-[#FACC15] text-[#FDE047]'
                     : 'bg-[#2C160C]/90 border-[#78350F] text-[#A88973]'
                 }`}
               >
                 <span className="text-xs sm:text-base font-bold leading-none">♫</span>
-                <span className="text-[9px] sm:text-[11px] font-bold leading-none mt-0.5">
+                <span className="hidden sm:inline text-[10px] font-bold leading-none mt-0.5">
                   {isMusicOn && !isMuted ? 'Music' : 'Off'}
                 </span>
               </button>
@@ -613,7 +613,7 @@ export default function App() {
                   e.currentTarget.blur();
                   handleToggleMute();
                 }}
-                className="cozy-interactive-glow w-10 h-10 sm:w-[58px] sm:h-[58px] rounded-full bg-[#2C160C]/95 hover:bg-[#431E0F] border-2 border-[#F59E0B] text-[#FFFBEB] flex items-center justify-center shadow-md cursor-pointer"
+                className="cozy-interactive-glow w-9 h-9 sm:w-[54px] sm:h-[54px] rounded-full bg-[#2C160C]/95 hover:bg-[#431E0F] border-2 border-[#F59E0B] text-[#FFFBEB] flex items-center justify-center shadow-md cursor-pointer shrink-0"
               >
                 {isMuted ? (
                   <svg viewBox="0 0 24 24" className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" strokeWidth="2.2">
@@ -635,7 +635,7 @@ export default function App() {
                   e.currentTarget.blur();
                   setShellMode('paused');
                 }}
-                className="cozy-interactive-glow w-10 h-10 sm:w-[58px] sm:h-[58px] rounded-full bg-[#2C160C]/95 hover:bg-[#431E0F] border-2 border-[#F59E0B] text-[#FFFBEB] flex items-center justify-center shadow-md cursor-pointer"
+                className="cozy-interactive-glow w-9 h-9 sm:w-[54px] sm:h-[54px] rounded-full bg-[#2C160C]/95 hover:bg-[#431E0F] border-2 border-[#F59E0B] text-[#FFFBEB] flex items-center justify-center shadow-md cursor-pointer shrink-0"
               >
                 <svg viewBox="0 0 24 24" className="w-4 h-4 sm:w-5 sm:h-5" fill="currentColor">
                   <rect x="6" y="4" width="4" height="16" rx="1" />
@@ -650,7 +650,7 @@ export default function App() {
             <div
               role="status"
               data-testid="perfect-celebration-toast"
-              className="animate-float-perfect pointer-events-none self-center bg-[#2C160C]/95 border-2 border-[#FACC15] text-[#FFFBEB] px-4 py-2 rounded-full shadow-[0_8px_24px_rgba(0,0,0,0.6)] max-w-xs sm:max-w-lg text-center"
+              className="animate-float-perfect pointer-events-none self-center bg-[#2C160C]/95 border-2 border-[#FACC15] text-[#FFFBEB] px-4 py-2 rounded-full shadow-[0_8px_24px_rgba(0,0,0,0.6)] max-w-[92vw] sm:max-w-lg text-center"
             >
               <div className="flex items-center justify-center gap-2 text-sm sm:text-xl font-display font-bold text-[#FDE047]">
                 <GullakCoinSvgIcon className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" />
@@ -665,13 +665,14 @@ export default function App() {
 
           {/* =================================================================
               BOTTOM ZONE:
-              - Row A: Bottom-Left 3-Station Menu (with Empty Tray / Undo) + Bottom-Right Customer Order Card
+              - Row A: Fluid responsive Bottom-Left 3-Station Menu + Bottom-Right Customer Card
+                (Stacks cleanly on phones <640px; sits side-by-side at 55% / 43% on tablets & desktops >=640px)
               - Row B: Sleek Nostalgic Radio Scrolling Ticker at the bottom perimeter
           ================================================================= */}
-          <div className="w-full flex flex-col gap-1">
-            <div className="w-full flex flex-col-reverse sm:flex-row items-stretch sm:items-end justify-between gap-1.5 sm:gap-2">
+          <div className="w-full max-w-full flex flex-col gap-1">
+            <div className="w-full max-w-full flex flex-col-reverse sm:flex-row items-stretch sm:items-end justify-between gap-1 sm:gap-2">
               {/* BOTTOM-LEFT: Compact Collapsible 3-Station Counter Menu + Forgiving Empty Tray / Undo */}
-              <div className="pointer-events-auto w-full sm:w-[410px] md:w-[445px] shrink-0 flex flex-col items-start">
+              <div className="pointer-events-auto w-full sm:w-[55%] sm:max-w-[445px] min-w-0 flex flex-col items-start">
                 <div className="flex items-center gap-1.5 ml-2">
                   <button
                     type="button"
@@ -707,8 +708,8 @@ export default function App() {
                 {!isDockCollapsed && (
                   <div className="w-full bg-[#2C160C]/95 border-2 border-[#F59E0B] rounded-xl p-1.5 shadow-[0_6px_18px_rgba(0,0,0,0.55)]">
                     {/* Compact Single-Row Guided Bar */}
-                    <div className="flex items-center justify-between gap-1.5 pb-1 mb-1 border-b border-[#F59E0B]/30 px-1">
-                      <span className="text-[11px] sm:text-xs font-bold text-[#FDE68A] truncate">
+                    <div className="flex items-center justify-between gap-1.5 pb-1 mb-1 border-b border-[#F59E0B]/30 px-1 min-w-0">
+                      <span className="text-[11px] sm:text-xs font-bold text-[#FDE68A] truncate min-w-0">
                         {guided.instruction}
                       </span>
 
@@ -719,7 +720,7 @@ export default function App() {
                           e.currentTarget.blur();
                           handleGuidedNextStep();
                         }}
-                        className={`cozy-interactive-glow min-h-[30px] px-3 py-0.5 rounded-full font-display font-bold text-xs sm:text-sm border transition-transform active:scale-[0.98] cursor-pointer whitespace-nowrap shrink-0 ${
+                        className={`cozy-interactive-glow min-h-[28px] sm:min-h-[30px] px-2.5 sm:px-3 py-0.5 rounded-full font-display font-bold text-[11px] sm:text-sm border transition-transform active:scale-[0.98] cursor-pointer whitespace-nowrap shrink-0 ${
                           readyToServe
                             ? 'bg-[#15803D] hover:bg-[#166534] text-[#FFFBEB] border-[#86EFAC]'
                             : 'bg-[#D97706] hover:bg-[#B45309] text-[#FFFBEB] border-[#FDE68A]'
@@ -730,7 +731,7 @@ export default function App() {
                     </div>
 
                     {/* 3 Tactile Station Buttons Row */}
-                    <div className="grid grid-cols-3 gap-1.5">
+                    <div className="grid grid-cols-3 gap-1 sm:gap-1.5">
                       {/* STATION 1: PREP */}
                       <button
                         type="button"
@@ -740,7 +741,7 @@ export default function App() {
                           handleStation1Crush();
                         }}
                         disabled={st.crushCount >= 3}
-                        className={`cozy-interactive-glow min-h-[42px] sm:min-h-[46px] px-1.5 sm:px-2 py-1 rounded-lg border flex flex-col items-start justify-center cursor-pointer ${
+                        className={`cozy-interactive-glow min-h-[40px] sm:min-h-[46px] px-1.5 sm:px-2 py-1 rounded-lg border flex flex-col items-start justify-center cursor-pointer min-w-0 ${
                           st.crushCount >= 3
                             ? 'bg-[#14532D]/80 border-[#4ADE80]/60 text-[#BBF7D0]'
                             : guided.stationNumber === 1
@@ -748,13 +749,13 @@ export default function App() {
                               : 'bg-[#36180C] hover:bg-[#431E0F] border-[#78350F] text-[#FFFBEB]'
                         }`}
                       >
-                        <div className="flex items-center justify-between w-full text-[10px] sm:text-[11px] font-bold text-[#FCD34D]">
+                        <div className="flex items-center justify-between w-full text-[10px] sm:text-[11px] font-bold text-[#FCD34D] min-w-0">
                           <span className="flex items-center gap-0.5 truncate">
-                            <MortarSvgIcon className="w-3.5 h-3.5 shrink-0" /> 1. Spices
+                            <MortarSvgIcon className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" /> 1. Spices
                           </span>
-                          <span className="font-mono-num">{st.crushCount}/3</span>
+                          <span className="font-mono-num shrink-0">{st.crushCount}/3</span>
                         </div>
-                        <div className="font-bold text-[11px] sm:text-xs truncate w-full text-left">
+                        <div className="font-bold text-[10px] sm:text-xs truncate w-full text-left">
                           {st.crushCount >= 3
                             ? `✓ ${SPICE_LABELS[st.spiceSelected].hindi}`
                             : `Crush ${SPICE_LABELS[order.spice].hindi}`}
@@ -770,7 +771,7 @@ export default function App() {
                           handleStation2Brew('auto_next');
                         }}
                         disabled={st.isBoiled}
-                        className={`cozy-interactive-glow min-h-[42px] sm:min-h-[46px] px-1.5 sm:px-2 py-1 rounded-lg border flex flex-col items-start justify-center cursor-pointer ${
+                        className={`cozy-interactive-glow min-h-[40px] sm:min-h-[46px] px-1.5 sm:px-2 py-1 rounded-lg border flex flex-col items-start justify-center cursor-pointer min-w-0 ${
                           st.isBoiled
                             ? 'bg-[#14532D]/80 border-[#4ADE80]/60 text-[#BBF7D0]'
                             : guided.stationNumber === 2
@@ -778,15 +779,15 @@ export default function App() {
                               : 'bg-[#36180C] hover:bg-[#431E0F] border-[#78350F] text-[#FFFBEB]'
                         }`}
                       >
-                        <div className="flex items-center justify-between w-full text-[10px] sm:text-[11px] font-bold text-[#FCD34D]">
+                        <div className="flex items-center justify-between w-full text-[10px] sm:text-[11px] font-bold text-[#FCD34D] min-w-0">
                           <span className="flex items-center gap-0.5 truncate">
-                            <PatilaStoveSvgIcon className="w-3.5 h-3.5 shrink-0" /> 2. Stove
+                            <PatilaStoveSvgIcon className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" /> 2. Stove
                           </span>
-                          <span className="font-mono-num">
+                          <span className="font-mono-num shrink-0">
                             {st.isBoiled ? '100%' : `${Math.round(st.boilProgress)}%`}
                           </span>
                         </div>
-                        <div className="font-bold text-[11px] sm:text-xs truncate w-full text-left">
+                        <div className="font-bold text-[10px] sm:text-xs truncate w-full text-left">
                           {!st.waterAdded
                             ? '+ Add Water'
                             : !st.teaLeavesAdded
@@ -812,7 +813,7 @@ export default function App() {
                           handleStation3PlateOrServe();
                         }}
                         disabled={!st.isBoiled}
-                        className={`cozy-interactive-glow min-h-[42px] sm:min-h-[46px] px-1.5 sm:px-2 py-1 rounded-lg border flex flex-col items-start justify-center cursor-pointer ${
+                        className={`cozy-interactive-glow min-h-[40px] sm:min-h-[46px] px-1.5 sm:px-2 py-1 rounded-lg border flex flex-col items-start justify-center cursor-pointer min-w-0 ${
                           !st.isBoiled
                             ? 'bg-[#29130A]/80 border-[#572814] text-[#A88973] cursor-not-allowed'
                             : readyToServe
@@ -820,15 +821,15 @@ export default function App() {
                               : 'bg-[#0F766E] hover:bg-[#0D9488] border-[#99F6E4] text-[#FFFBEB]'
                         }`}
                       >
-                        <div className="flex items-center justify-between w-full text-[10px] sm:text-[11px] font-bold text-[#FCD34D]">
+                        <div className="flex items-center justify-between w-full text-[10px] sm:text-[11px] font-bold text-[#FCD34D] min-w-0">
                           <span className="flex items-center gap-0.5 truncate">
-                            <KulhadTraySvgIcon className="w-3.5 h-3.5 shrink-0" /> 3. Tray
+                            <KulhadTraySvgIcon className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" /> 3. Tray
                           </span>
-                          <span className="font-mono-num">
+                          <span className="font-mono-num shrink-0">
                             {readyToServe ? 'Serve!' : st.pouredCup ? '1/2' : '0/2'}
                           </span>
                         </div>
-                        <div className="font-bold text-[11px] sm:text-xs truncate w-full text-left">
+                        <div className="font-bold text-[10px] sm:text-xs truncate w-full text-left">
                           {!st.pouredCup
                             ? `Pour ${CUP_LABELS[order.cup].name}`
                             : !st.platedSnack
@@ -845,10 +846,10 @@ export default function App() {
               <section
                 aria-label="Customer Order"
                 data-testid="customer-order-card"
-                className="pointer-events-auto w-full sm:w-[300px] md:w-[330px] shrink-0 bg-[#FDF6E7]/95 border-2 border-[#9A3412] rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 shadow-[0_6px_18px_rgba(0,0,0,0.5)]"
+                className="pointer-events-auto w-full sm:w-[43%] sm:max-w-[335px] min-w-0 bg-[#FDF6E7]/95 border-2 border-[#9A3412] rounded-xl px-2.5 sm:px-3 py-1 sm:py-2 shadow-[0_6px_18px_rgba(0,0,0,0.5)]"
               >
-                <div className="flex items-baseline justify-between gap-1.5 border-b border-[#D97706]/30 pb-0.5 mb-0.5 sm:mb-1">
-                  <div className="truncate">
+                <div className="flex items-baseline justify-between gap-1.5 border-b border-[#D97706]/30 pb-0.5 mb-0.5">
+                  <div className="truncate min-w-0">
                     <span className="font-display font-bold text-xs sm:text-base text-[#2C160C]">
                       {order.name}
                     </span>
@@ -856,19 +857,19 @@ export default function App() {
                       · {order.role}
                     </span>
                   </div>
-                  <span className="text-[10px] font-bold text-[#15803D] shrink-0">
+                  <span className="text-[9px] sm:text-[10px] font-bold text-[#15803D] shrink-0">
                     No Timer · Patient
                   </span>
                 </div>
 
                 <p
                   data-testid="customer-dialogue"
-                  className="text-[11px] sm:text-[13px] leading-snug font-semibold text-[#231109] line-clamp-1 sm:line-clamp-2"
+                  className="text-[10px] sm:text-[13px] leading-snug font-semibold text-[#231109] line-clamp-1 sm:line-clamp-2"
                 >
                   “{order.greeting}”
                 </p>
 
-                <div className="mt-0.5 sm:mt-1 pt-0.5 border-t border-[#D97706]/25 text-[10px] sm:text-[11px] font-bold text-[#7C2D12] truncate">
+                <div className="mt-0.5 pt-0.5 border-t border-[#D97706]/25 text-[10px] sm:text-[11px] font-bold text-[#7C2D12] truncate">
                   <span>{SPICE_LABELS[order.spice].name}</span>
                   <span className="mx-1" aria-hidden="true">·</span>
                   <span>
@@ -887,9 +888,9 @@ export default function App() {
               data-testid="nostalgic-radio-ticker"
               onClick={handleRadioTuneClick}
               title="Click to tune Nostalgic Radio broadcast"
-              className="pointer-events-auto w-full overflow-hidden bg-[#231109]/92 border border-[#F59E0B]/50 rounded-full py-0.5 px-3 cursor-pointer"
+              className="pointer-events-auto w-full max-w-full overflow-hidden bg-[#231109]/92 border border-[#F59E0B]/50 rounded-full py-0.5 px-3 cursor-pointer"
             >
-              <div className="radio-ticker-scroll text-[11px] sm:text-xs font-semibold text-[#FDE68A] tracking-wide">
+              <div className="radio-ticker-scroll text-[10px] sm:text-xs font-semibold text-[#FDE68A] tracking-wide">
                 <span className="mr-12">{radioInfo.tickerText}</span>
                 <span className="mr-12">{radioInfo.tickerText}</span>
               </div>
