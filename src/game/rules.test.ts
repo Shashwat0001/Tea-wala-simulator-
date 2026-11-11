@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import {
   createInitialGameState,
   crushSpiceStep,
+  crushSpiceByDrag,
   addBrewIngredientStep,
   advanceBoiling,
   plateOrderStep,
+  evaluatePourMeterChallenge,
+  cleanCounterSpill,
+  tickGameplayTimers,
+  buyWholesaleStock,
   isOrderReadyToServe,
   completeServeCustomer,
   getRadioEventForCustomerIndex,
@@ -99,4 +104,72 @@ test('Empty Tray / Undo clears current preparation with zero penalty', () => {
   const cleared = resetCurrentPreparation(state);
   assert.equal(hasAnyStationProgress(cleared.station), false);
   assert.equal(cleared.coins, 40);
+});
+
+test('Sweet-Spot Pouring Meter grants Perfect bonus in green zone and triggers Spill + Wipe Cloth in red zone', () => {
+  let state = createInitialGameState({ coins: 30, customersServedTotal: 0 });
+  state = crushSpiceStep(state);
+  state = crushSpiceStep(state);
+  state = crushSpiceStep(state);
+  state = addBrewIngredientStep(state, 'water');
+  state = addBrewIngredientStep(state, 'tea_leaves');
+  state = addBrewIngredientStep(state, 'milk_or_lemon');
+  state = addBrewIngredientStep(state, 'crushed_spices');
+  state = advanceBoiling(state, 3.0);
+  assert.equal(state.station.isBoiled, true);
+
+  // 1. Red zone (< 20): triggers spill, deducts 3 coins, blocks serving until wiped
+  const spillRes = evaluatePourMeterChallenge(state, 10);
+  assert.equal(spillRes.outcome, 'spill');
+  assert.equal(spillRes.penaltyCoins, 3);
+  assert.equal(spillRes.nextState.coins, 27);
+  assert.equal(spillRes.nextState.station.hasSpillOnCounter, true);
+  assert.equal(spillRes.nextState.ledger.penaltiesToday, 3);
+
+  const withSnack = plateOrderStep(spillRes.nextState, {
+    snack: spillRes.nextState.currentCustomer.snack,
+  });
+  // Cannot serve while spill is on counter
+  assert.equal(isOrderReadyToServe(withSnack.station), false);
+
+  // Wiping with Wipe Cloth cleans spill and allows serving
+  const wipedState = cleanCounterSpill(withSnack);
+  assert.equal(wipedState.station.hasSpillOnCounter, false);
+  assert.equal(isOrderReadyToServe(wipedState.station), true);
+
+  // 2. Green sweet-spot zone (50): grants perfect pour (+6 skill bonus)
+  const perfectRes = evaluatePourMeterChallenge(state, 50);
+  assert.equal(perfectRes.outcome, 'perfect');
+  assert.equal(perfectRes.nextState.station.pourQuality, 'perfect');
+  const reward = calculateOrderCoins(
+    perfectRes.nextState.currentCustomer,
+    perfectRes.nextState.radioEvent,
+    perfectRes.nextState.unlockedUpgrades,
+    perfectRes.nextState.station,
+  );
+  assert.equal(reward.skillBonus, 6);
+});
+
+test('VIP Memory Customer fades order after 5s and awards memory bonus, plus Wholesale Market restocks inventory', () => {
+  // Customer index 1 is a VIP customer
+  let state = createInitialGameState({ coins: 40, customersServedTotal: 1 });
+  assert.equal(state.currentCustomer.isVip, true);
+  assert.equal(state.station.vipOrderHidden, false);
+
+  // Tick 5.5 seconds -> VIP order bubble fades into memory mode
+  state = tickGameplayTimers(state, 5.5);
+  assert.equal(state.station.vipOrderHidden, true);
+
+  // Drag pestle in Masala Mortar minigame to 100%
+  state = crushSpiceByDrag(state, 50);
+  assert.equal(state.station.crushProgress, 50);
+  state = crushSpiceByDrag(state, 55);
+  assert.equal(state.station.crushCount, 3);
+
+  // Wholesale Market restock test
+  const initialMilk = state.inventory.milk;
+  const buyMilk = buyWholesaleStock(state, 'milk');
+  assert.equal(buyMilk.success, true);
+  assert.equal(buyMilk.nextState.inventory.milk > initialMilk, true);
+  assert.equal(buyMilk.nextState.coins, 32);
 });

@@ -429,6 +429,155 @@ class TapriSoundEngine {
     });
   }
 
+  private lofiTrackIndex: number = 0;
+  private readonly LOFI_TRACK_NAMES: string[] = [
+    'Raag Yaman Morning Lo-Fi',
+    'Monsoon Chai Beats',
+    'Evening Santoor Lounge',
+  ];
+
+  public getLoFiTrackName(): string {
+    return this.LOFI_TRACK_NAMES[this.lofiTrackIndex % this.LOFI_TRACK_NAMES.length];
+  }
+
+  public cycleLoFiTrack(): string {
+    this.lofiTrackIndex = (this.lofiTrackIndex + 1) % this.LOFI_TRACK_NAMES.length;
+    this.melodyStep = this.lofiTrackIndex * 8;
+    this.playRadioTune();
+    return this.getLoFiTrackName();
+  }
+
+  // Sweet-spot Perfect Pour chime
+  public playSweetSpotPerfect(): void {
+    if (this.muted) return;
+    this.startBackgroundMusic();
+    const ctx = this.getContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    const chord = [587.33, 739.99, 880, 1174.66];
+    chord.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = now + i * 0.055;
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.16, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.32);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.34);
+    });
+  }
+
+  // Spill / Too Sweet error splash
+  public playSpillError(): void {
+    if (this.muted) return;
+    this.startBackgroundMusic();
+    const ctx = this.getContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    // Descending splash tone
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(240, now);
+    osc.frequency.exponentialRampToValueAtTime(95, now + 0.28);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(520, now);
+
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.32);
+
+    // Liquid splash noise
+    const bufferSize = Math.floor(ctx.sampleRate * 0.2);
+    const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const output = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      output[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.4));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuffer;
+    const nGain = ctx.createGain();
+    nGain.gain.setValueAtTime(0.14, now);
+    nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    noise.connect(nGain);
+    nGain.connect(ctx.destination);
+    noise.start(now);
+  }
+
+  // Wipe Cloth cleanup swish
+  public playWipeClean(): void {
+    if (this.muted) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    const bufferSize = Math.floor(ctx.sampleRate * 0.18);
+    const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const output = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      output[i] = (Math.random() * 2 - 1) * Math.sin((i / bufferSize) * Math.PI);
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(900, now);
+    filter.frequency.linearRampToValueAtTime(1600, now + 0.18);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.16, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start(now);
+  }
+
+  // Monsoon distant thunder rumble
+  public playThunderRumble(): void {
+    if (this.muted) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    const bufferSize = Math.floor(ctx.sampleRate * 0.9);
+    const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const output = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      output[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.45));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(165, now);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.22, now + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.88);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start(now);
+  }
+
   // Vintage All India Radio tuning jingle
   public playRadioTune(): void {
     if (this.muted) return;

@@ -12,6 +12,7 @@ export type InteractiveStationTarget =
   | 'station_stove'
   | 'station_tray'
   | 'station_radio'
+  | 'station_spill'
   | 'customer';
 
 interface ParticleSlot {
@@ -128,9 +129,16 @@ export class TapriScene3D {
     end: THREE.Vector3;
   }[] = [];
 
-  // Upgrades in 3D World
+  // Upgrades & Dynamic Visual Props in 3D World
   private marigoldGarlandGroup!: THREE.Group;
   private counterSamosaDisplay!: THREE.Group;
+  private bulbAssemblyGroup!: THREE.Group;
+  private bulbCounterPoolMesh!: THREE.Mesh;
+  private parallaxFarGroup!: THREE.Group;
+  private parallaxMidGroup!: THREE.Group;
+  private spillPuddleGroup!: THREE.Group;
+  private wipeClothGroup!: THREE.Group;
+  private wipeAnimTimer = 0;
 
   // Active Station Guide Ring & Soft Hover Glow Ring
   private guideRingMesh!: THREE.Mesh;
@@ -160,10 +168,13 @@ export class TapriScene3D {
   private particles: ParticleSlot[] = [];
   private particleIndex = 0;
 
-  // Monsoon Rain InstancedMesh
+  // Monsoon Rain InstancedMesh & Floating Golden Dust Motes
   private rainCount = 72;
   private rainInstanced!: THREE.InstancedMesh;
   private rainPositions: { x: number; y: number; z: number; speed: number }[] = [];
+  private dustMoteCount = 36;
+  private dustMoteInstanced!: THREE.InstancedMesh;
+  private dustMotes: { x: number; y: number; z: number; phase: number; speed: number }[] = [];
 
   // Reusable scratch math objects (Zero GC in loop)
   private _dummy = new THREE.Object3D();
@@ -415,6 +426,58 @@ export class TapriScene3D {
 
     this.addContactShadow(scooter, 0.9, 0.01);
     this.scene.add(scooter);
+
+    // Multilayered Parallax Indian Street Scene (Far Temple/Haveli Horizon + Mid Bazaar Streetlamps)
+    this.parallaxFarGroup = new THREE.Group();
+    const farSilMat = new THREE.MeshStandardMaterial({
+      color: 0xb87648,
+      roughness: 0.92,
+    });
+    const domeMat = new THREE.MeshStandardMaterial({
+      color: 0xd99152,
+      roughness: 0.85,
+    });
+    const farBuildings = [
+      { x: -9.5, w: 3.4, h: 4.8, z: -12.5, hasDome: true },
+      { x: -5.2, w: 3.8, h: 3.9, z: -13.0, hasDome: false },
+      { x: 0.0, w: 4.2, h: 5.5, z: -13.5, hasDome: true },
+      { x: 5.4, w: 3.6, h: 4.1, z: -12.8, hasDome: false },
+      { x: 9.6, w: 3.2, h: 4.9, z: -12.4, hasDome: true },
+    ];
+    farBuildings.forEach((b) => {
+      const bldg = new THREE.Mesh(new THREE.BoxGeometry(b.w, b.h, 1.4), farSilMat);
+      bldg.position.set(b.x, b.h * 0.5, b.z);
+      this.parallaxFarGroup.add(bldg);
+      if (b.hasDome) {
+        const dome = new THREE.Mesh(new THREE.ConeGeometry(b.w * 0.36, 1.8, 8), domeMat);
+        dome.position.set(b.x, b.h + 0.9, b.z);
+        this.parallaxFarGroup.add(dome);
+      }
+    });
+    this.scene.add(this.parallaxFarGroup);
+
+    this.parallaxMidGroup = new THREE.Group();
+    const postMat = new THREE.MeshStandardMaterial({
+      color: 0x3e2723,
+      roughness: 0.6,
+      metalness: 0.4,
+    });
+    const lampGlowMat = new THREE.MeshStandardMaterial({
+      color: 0xfffbeb,
+      emissive: 0xfbbf24,
+      emissiveIntensity: 1.4,
+      roughness: 0.2,
+    });
+    [-4.8, 4.8].forEach((lx) => {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 3.8, 8), postMat);
+      pole.position.set(lx, 1.9, -4.2);
+      this.parallaxMidGroup.add(pole);
+
+      const globe = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 12), lampGlowMat);
+      globe.position.set(lx, 3.85, -4.2);
+      this.parallaxMidGroup.add(globe);
+    });
+    this.scene.add(this.parallaxMidGroup);
   }
 
   private buildTree(x: number, z: number, scale: number): void {
@@ -605,6 +668,105 @@ export class TapriScene3D {
     });
     this.marigoldGarlandGroup.visible = false;
     counterGroup.add(this.marigoldGarlandGroup);
+
+    // Hanging Warm Glowing Tapri Bulb (Reacts dynamically to mouse/pointer cursor)
+    this.bulbAssemblyGroup = new THREE.Group();
+    this.bulbAssemblyGroup.position.set(0, 4.15, 0.32);
+
+    const cordMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.018, 0.018, 0.72, 8),
+      new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.8 }),
+    );
+    cordMesh.position.y = -0.36;
+    this.bulbAssemblyGroup.add(cordMesh);
+
+    const brassShade = new THREE.Mesh(
+      new THREE.ConeGeometry(0.32, 0.22, 18, 1, true),
+      new THREE.MeshStandardMaterial({
+        color: 0xd97706,
+        roughness: 0.28,
+        metalness: 0.78,
+        side: THREE.DoubleSide,
+      }),
+    );
+    brassShade.position.y = -0.72;
+    this.bulbAssemblyGroup.add(brassShade);
+
+    const filamentBulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.13, 14, 14),
+      new THREE.MeshStandardMaterial({
+        color: 0xfffbeb,
+        emissive: 0xfacc15,
+        emissiveIntensity: 2.2,
+        roughness: 0.15,
+      }),
+    );
+    filamentBulb.position.y = -0.82;
+    this.bulbAssemblyGroup.add(filamentBulb);
+    counterGroup.add(this.bulbAssemblyGroup);
+
+    // Cursor-Reactive Warm Light Pool on the Counter Tabletop
+    const poolGeo = new THREE.CircleGeometry(1.85, 32);
+    poolGeo.rotateX(-Math.PI / 2);
+    const poolMat = new THREE.MeshBasicMaterial({
+      color: 0xfef08a,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+    });
+    this.bulbCounterPoolMesh = new THREE.Mesh(poolGeo, poolMat);
+    this.bulbCounterPoolMesh.position.set(0, 1.118, 0.32);
+    counterGroup.add(this.bulbCounterPoolMesh);
+
+    // Animated Counter Tea Spill Puddle + Wipe Cloth (Shown when a pour spill occurs)
+    this.spillPuddleGroup = new THREE.Group();
+    this.spillPuddleGroup.position.set(1.32, 1.122, 0.56);
+    this.spillPuddleGroup.visible = false;
+
+    const spillMat = new THREE.MeshStandardMaterial({
+      color: 0xb45309,
+      roughness: 0.12,
+      metalness: 0.15,
+    });
+    const mainPuddle = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.5, 0.018, 24), spillMat);
+    mainPuddle.scale.set(1.25, 1, 0.82);
+    this.spillPuddleGroup.add(mainPuddle);
+
+    const dropOffsets = [
+      [-0.58, 0.18, 0.14],
+      [0.55, -0.15, 0.12],
+      [0.25, 0.36, 0.1],
+    ];
+    dropOffsets.forEach(([dx, dz, dr]) => {
+      const drop = new THREE.Mesh(new THREE.CylinderGeometry(dr, dr * 1.1, 0.015, 14), spillMat);
+      drop.position.set(dx, 0, dz);
+      this.spillPuddleGroup.add(drop);
+    });
+
+    // Folded Cotton Wipe Cloth beside the puddle
+    this.wipeClothGroup = new THREE.Group();
+    this.wipeClothGroup.position.set(-0.35, 0.04, 0.15);
+    const clothMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.34, 0.045, 0.26),
+      new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.85 }),
+    );
+    const stripeMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.35, 0.048, 0.05),
+      new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.85 }),
+    );
+    this.wipeClothGroup.add(clothMesh, stripeMesh);
+    this.spillPuddleGroup.add(this.wipeClothGroup);
+
+    const spillHitbox = new THREE.Mesh(
+      new THREE.BoxGeometry(1.5, 0.5, 1.1),
+      new THREE.MeshBasicMaterial({ visible: false }),
+    );
+    spillHitbox.position.set(0, 0.2, 0);
+    spillHitbox.userData.stationTarget = 'station_spill';
+    this.spillPuddleGroup.add(spillHitbox);
+    this.interactables.push(spillHitbox);
+
+    counterGroup.add(this.spillPuddleGroup);
 
     this.scene.add(counterGroup);
   }
@@ -1518,6 +1680,34 @@ export class TapriScene3D {
     }
     this.rainInstanced.instanceMatrix.needsUpdate = true;
     this.scene.add(this.rainInstanced);
+
+    // Floating Golden Dust Motes illuminated by the hanging tapri bulb
+    const moteGeo = new THREE.SphereGeometry(0.028, 6, 6);
+    const moteMat = new THREE.MeshBasicMaterial({
+      color: 0xfef08a,
+      transparent: true,
+      opacity: 0.62,
+    });
+    this.dustMoteInstanced = new THREE.InstancedMesh(moteGeo, moteMat, this.dustMoteCount);
+    this.dustMoteInstanced.frustumCulled = false;
+    for (let i = 0; i < this.dustMoteCount; i++) {
+      const mx = (Math.random() - 0.5) * 7.6;
+      const my = 1.25 + Math.random() * 2.5;
+      const mz = -0.6 + Math.random() * 1.5;
+      this.dustMotes.push({
+        x: mx,
+        y: my,
+        z: mz,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.4 + Math.random() * 0.5,
+      });
+      this._dummy.position.set(mx, my, mz);
+      this._dummy.scale.setScalar(0.8 + Math.random() * 0.5);
+      this._dummy.updateMatrix();
+      this.dustMoteInstanced.setMatrixAt(i, this._dummy.matrix);
+    }
+    this.dustMoteInstanced.instanceMatrix.needsUpdate = true;
+    this.scene.add(this.dustMoteInstanced);
   }
 
   public spawnParticles(
@@ -1615,6 +1805,17 @@ export class TapriScene3D {
     this.spawnParticles(-3.15, 1.75, -0.22, 12, 0xfbbf24, 1.1, 1.4);
   }
 
+  public triggerSpillSplashEffect(): void {
+    this.cameraTrauma = 0.26;
+    this.spawnParticles(1.32, 1.22, 0.56, 18, 0xb45309, 1.5, 1.3);
+  }
+
+  public triggerWipeCleanEffect(): void {
+    this.wipeAnimTimer = 0.55;
+    this.teaMakerWorkTimer = 0.6;
+    this.spawnParticles(1.32, 1.22, 0.56, 14, 0xfef08a, 1.2, 1.1);
+  }
+
   public syncGameState(
     state: TapriGameState,
     shellMode: 'title' | 'playing' | 'paused' | 'gameover',
@@ -1691,11 +1892,12 @@ export class TapriScene3D {
       );
     }
 
-    // 4. Update Station 3 Serving Tray (Cup + Snack)
+    // 4. Update Station 3 Serving Tray (Cup + Snack + Counter Spill State)
     const activeCup = st.pouredCup ?? state.currentCustomer.cup;
     this.kulhadGroup.visible = activeCup === 'kulhad';
     this.cuttingGlassGroup.visible = activeCup === 'cutting_glass';
     this.cupLiquidMesh.visible = st.pouredCup !== null;
+    this.spillPuddleGroup.visible = st.hasSpillOnCounter || this.wipeAnimTimer > 0;
 
     this.snackParleGroup.visible = st.platedSnack === 'parle_g';
     this.snackSamosaGroup.visible = st.platedSnack === 'samosa';
@@ -1703,7 +1905,9 @@ export class TapriScene3D {
     this.snackMithaiGroup.visible = st.platedSnack === 'mithai';
 
     // 5. Update Unlocked 3D Upgrades
-    this.royalCrownGroup.visible = state.unlockedUpgrades.includes('brass_teapot');
+    this.royalCrownGroup.visible =
+      state.unlockedUpgrades.includes('brass_teapot') ||
+      state.unlockedUpgrades.includes('larger_kettle');
     this.marigoldGarlandGroup.visible =
       state.unlockedUpgrades.includes('marigold_lights') || state.radioEvent === 'diwali';
     this.counterSamosaDisplay.visible = state.unlockedUpgrades.includes('samosa');
@@ -2301,6 +2505,78 @@ export class TapriScene3D {
       }
       this.rainInstanced.instanceMatrix.needsUpdate = true;
     }
+
+    // 12. Cursor-Reactive Hanging Glowing Bulb, Soft Counter Light Pool & Parallax Street Scene
+    const targetBulbSwingZ = this.pointerNormalized.x * 0.22 + Math.sin(elapsed * 1.6) * 0.04;
+    const targetBulbSwingX = -this.pointerNormalized.y * 0.14;
+    this.bulbAssemblyGroup.rotation.z = THREE.MathUtils.lerp(
+      this.bulbAssemblyGroup.rotation.z,
+      targetBulbSwingZ,
+      dampFactor,
+    );
+    this.bulbAssemblyGroup.rotation.x = THREE.MathUtils.lerp(
+      this.bulbAssemblyGroup.rotation.x,
+      targetBulbSwingX,
+      dampFactor,
+    );
+    this.festivalLight.position.x = THREE.MathUtils.lerp(
+      this.festivalLight.position.x,
+      this.pointerNormalized.x * 1.65,
+      dampFactor,
+    );
+    this.festivalLight.position.z = THREE.MathUtils.lerp(
+      this.festivalLight.position.z,
+      0.32 + this.pointerNormalized.y * 0.45,
+      dampFactor,
+    );
+    this.bulbCounterPoolMesh.position.x = THREE.MathUtils.lerp(
+      this.bulbCounterPoolMesh.position.x,
+      this.pointerNormalized.x * 1.15,
+      dampFactor,
+    );
+    this.bulbCounterPoolMesh.position.z = THREE.MathUtils.lerp(
+      this.bulbCounterPoolMesh.position.z,
+      0.32 - this.pointerNormalized.y * 0.25,
+      dampFactor,
+    );
+
+    // Multilayered Parallax Street Shift
+    this.parallaxFarGroup.position.x = THREE.MathUtils.lerp(
+      this.parallaxFarGroup.position.x,
+      -this.pointerNormalized.x * 0.65,
+      dampFactor,
+    );
+    this.parallaxMidGroup.position.x = THREE.MathUtils.lerp(
+      this.parallaxMidGroup.position.x,
+      -this.pointerNormalized.x * 0.32,
+      dampFactor,
+    );
+
+    // Wipe Cloth Scrub Animation on Spill Puddle
+    if (this.wipeAnimTimer > 0) {
+      this.wipeAnimTimer = Math.max(0, this.wipeAnimTimer - simDt);
+      this.wipeClothGroup.position.x = Math.sin(elapsed * 28) * 0.38;
+      if (this.wipeAnimTimer <= 0) {
+        this.spillPuddleGroup.visible = false;
+      }
+    } else if (this.spillPuddleGroup.visible) {
+      const pulse = 1 + Math.sin(elapsed * 4.5) * 0.04;
+      this.spillPuddleGroup.scale.set(pulse, 1, pulse);
+      this.wipeClothGroup.position.x = -0.35 + Math.sin(elapsed * 3.5) * 0.05;
+    }
+
+    // Floating Golden Dust Motes in the Warm Bulb Beam
+    for (let i = 0; i < this.dustMoteCount; i++) {
+      const m = this.dustMotes[i];
+      const dy = m.y + Math.sin(elapsed * m.speed + m.phase) * 0.18;
+      const dx = m.x + Math.cos(elapsed * m.speed * 0.8 + m.phase) * 0.14;
+      this._dummy.position.set(dx, dy, m.z);
+      this._dummy.rotation.set(0, 0, 0);
+      this._dummy.scale.setScalar(0.75 + Math.sin(elapsed * 2.2 + m.phase) * 0.35);
+      this._dummy.updateMatrix();
+      this.dustMoteInstanced.setMatrixAt(i, this._dummy.matrix);
+    }
+    this.dustMoteInstanced.instanceMatrix.needsUpdate = true;
   }
 
   public dispose(): void {
