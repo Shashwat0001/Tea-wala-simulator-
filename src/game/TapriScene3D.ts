@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import {
   TapriGameState,
   CustomerAppearance,
@@ -14,6 +19,22 @@ export type InteractiveStationTarget =
   | 'station_radio'
   | 'station_spill'
   | 'customer';
+
+export interface ScreenAnchorPoint {
+  x: number; // 0..100 viewport percentage
+  y: number; // 0..100 viewport percentage
+}
+
+export interface WorldScreenAnchors {
+  mortar: ScreenAnchorPoint;
+  stove: ScreenAnchorPoint;
+  tray: ScreenAnchorPoint;
+  radio: ScreenAnchorPoint;
+  customer: ScreenAnchorPoint;
+  spill: ScreenAnchorPoint;
+}
+
+type FacialExpression = 'neutral' | 'blink' | 'happy' | 'focused' | 'surprised';
 
 interface ParticleSlot {
   active: boolean;
@@ -32,9 +53,16 @@ interface ParticleSlot {
 
 interface CharacterRig {
   root: THREE.Group;
+  torsoGroup: THREE.Group;
   headGroup: THREE.Group;
-  leftArm: THREE.Group;
-  rightArm: THREE.Group;
+  facePlaneMat: THREE.MeshBasicMaterial;
+  currentExpression: FacialExpression;
+  leftArm: THREE.Group; // Shoulder pivot
+  leftElbow: THREE.Group; // Elbow pivot
+  leftHand: THREE.Mesh;
+  rightArm: THREE.Group; // Shoulder pivot
+  rightElbow: THREE.Group; // Elbow pivot
+  rightHand: THREE.Mesh;
   leftLeg: THREE.Group;
   rightLeg: THREE.Group;
   heldCupGroup: THREE.Group;
@@ -49,18 +77,92 @@ interface CharacterRig {
   palluMesh: THREE.Mesh;
 }
 
+/**
+ * Custom WebGL Post-Processing Shader:
+ * 1. Subtle Depth of Field (DoF) blurring distant background trees & upper sky while keeping the counter razor-sharp
+ * 2. Light animated 1970s Vintage Film Grain & warm analog vignette
+ */
+const CinematicDoFAndGrainShader = {
+  uniforms: {
+    tDiffuse: { value: null as THREE.Texture | null },
+    uTime: { value: 0.0 },
+    uResolution: { value: new THREE.Vector2(1280, 720) },
+    uGrainIntensity: { value: 0.036 },
+    uDofStrength: { value: 1.85 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform vec2 uResolution;
+    uniform float uGrainIntensity;
+    uniform float uDofStrength;
+    varying vec2 vUv;
+
+    float hash12(vec2 p) {
+      vec3 p3  = fract(vec3(p.xyx) * 0.1031);
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.x + p3.y) * p3.z);
+    }
+
+    void main() {
+      // Focal plane is the Tapri Counter (around vUv.y = 0.36).
+      // Upper background (trees, distant temple domes & sky where vUv.y > 0.58) receives smooth DoF blur.
+      float bgBlurFactor = smoothstep(0.56, 0.92, vUv.y);
+      float fgBlurFactor = smoothstep(0.14, 0.0, vUv.y) * 0.35;
+      float coc = clamp(bgBlurFactor + fgBlurFactor, 0.0, 1.0) * uDofStrength;
+
+      vec2 texel = coc / uResolution;
+      vec4 baseCol = texture2D(tDiffuse, vUv);
+
+      if (coc > 0.04) {
+        vec4 sum = baseCol * 0.28;
+        sum += texture2D(tDiffuse, vUv + vec2( 1.0,  0.0) * texel) * 0.12;
+        sum += texture2D(tDiffuse, vUv + vec2(-1.0,  0.0) * texel) * 0.12;
+        sum += texture2D(tDiffuse, vUv + vec2( 0.0,  1.0) * texel) * 0.12;
+        sum += texture2D(tDiffuse, vUv + vec2( 0.0, -1.0) * texel) * 0.12;
+        sum += texture2D(tDiffuse, vUv + vec2( 0.85,  0.85) * texel) * 0.06;
+        sum += texture2D(tDiffuse, vUv + vec2(-0.85,  0.85) * texel) * 0.06;
+        sum += texture2D(tDiffuse, vUv + vec2( 0.85, -0.85) * texel) * 0.06;
+        sum += texture2D(tDiffuse, vUv + vec2(-0.85, -0.85) * texel) * 0.06;
+        baseCol = sum;
+      }
+
+      // Animated 1970s film grain
+      vec2 grainSeed = vUv * uResolution * 0.5 + vec2(fract(uTime * 17.3) * 100.0, fract(uTime * 29.7) * 100.0);
+      float grain = (hash12(grainSeed) - 0.5) * uGrainIntensity;
+
+      // Subtle warm 70s analog vignette
+      vec2 centered = vUv - 0.5;
+      float vig = 1.0 - dot(centered, centered) * 0.22;
+
+      vec3 finalRgb = clamp(baseCol.rgb * vig + vec3(grain, grain * 0.92, grain * 0.78), 0.0, 1.0);
+      gl_FragColor = vec4(finalRgb, baseCol.a);
+    }
+  `,
+};
+
 export class TapriScene3D {
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
+  private composer!: EffectComposer;
+  private bloomPass!: UnrealBloomPass;
+  private dofGrainPass!: ShaderPass;
   private isSoftwareGl: boolean;
   private frameId: number = 0;
   private disposed: boolean = false;
   private clock: THREE.Clock;
   private resizeObserver: ResizeObserver | null = null;
 
-  // Camera choreography — elevated clear angle showing full tabletop, Tea Maker, and walking Customers
+  // Camera choreography
   private mode: 'title' | 'playing' | 'paused' | 'gameover' = 'title';
   private cameraPosCurrent = new THREE.Vector3(0, 3.45, 5.35);
   private cameraLookCurrent = new THREE.Vector3(0, 1.15, -0.15);
@@ -77,10 +179,23 @@ export class TapriScene3D {
   private festivalLight!: THREE.PointLight;
   private currentRadioEvent: RadioEventId = 'normal';
 
-  // Interactive Raycasting
+  // Interactive Raycasting & World-Space Anchor Projection
   private raycaster = new THREE.Raycaster();
   private interactables: THREE.Object3D[] = [];
   private onStationClick?: (target: InteractiveStationTarget) => void;
+  private onWorldStateChange?: (
+    anchors: WorldScreenAnchors,
+    hovered: InteractiveStationTarget | null,
+  ) => void;
+  private lastAnchorEmitTime = 0;
+  private lastEmittedHovered: InteractiveStationTarget | null = null;
+
+  // Shared PBR Textures & Facial Expression Maps
+  private woodColorTex!: THREE.CanvasTexture;
+  private woodBumpTex!: THREE.CanvasTexture;
+  private clayBumpTex!: THREE.CanvasTexture;
+  private brassBumpTex!: THREE.CanvasTexture;
+  private faceTextures!: Record<FacialExpression, THREE.CanvasTexture>;
 
   // Station 1: Mortar & Pestle (Khalbatta)
   private mortarGroup!: THREE.Group;
@@ -142,24 +257,32 @@ export class TapriScene3D {
 
   // Active Station Guide Ring & Soft Hover Glow Ring
   private guideRingMesh!: THREE.Mesh;
-  private guideRingTargetX = -2.1;
-  private guideRingTargetZ = 0.35;
+  private guideRingTargetX = -2.05;
+  private guideRingTargetZ = 0.32;
   private hoverRingMesh!: THREE.Mesh;
   private hoveredStation: InteractiveStationTarget | null = null;
 
-  // 1. Tea Maker (Chaiwala) behind the counter
+  // 1. Tea Maker (Chaiwala) behind the counter with 2-Bone IK Arms & Face Swap
   private teaMakerRig!: CharacterRig;
   private teaMakerTargetX = 0;
   private teaMakerWorkTimer = 0;
+  private teaMakerHappyTimer = 0;
+  private teaMakerSurpriseTimer = 0;
+  private teaMakerActiveStation: 1 | 2 | 3 | 'spill' = 1;
+  private ikLeftTargetCurrent = new THREE.Vector3(-0.35, 1.25, -0.55);
+  private ikRightTargetCurrent = new THREE.Vector3(0.35, 1.25, -0.55);
+  private ikLeftTargetGoal = new THREE.Vector3(-0.35, 1.25, -0.55);
+  private ikRightTargetGoal = new THREE.Vector3(0.35, 1.25, -0.55);
+  private ikBlendCurrent = 0;
 
   // 2. Walking & Waiting Customers at the Counter
   private activeCustomerRig!: CharacterRig;
   private queuedCustomerRig!: CharacterRig;
   private departingCustomerRig!: CharacterRig;
 
-  private activeWalkProgress = 1; // 0 = walking in from road, 1 = waiting at counter
+  private activeWalkProgress = 1;
   private queuedWalkProgress = 1;
-  private departingWalkProgress = 1; // < 1 when walking away sipping chai
+  private departingWalkProgress = 1;
   private lastCustomerId = '';
 
   // Pooled Particle Ring Buffer (Zero-GC)
@@ -180,16 +303,22 @@ export class TapriScene3D {
   private _dummy = new THREE.Object3D();
   private _color = new THREE.Color();
   private _vec2 = new THREE.Vector2();
+  private _projVec = new THREE.Vector3();
 
   constructor(
     container: HTMLElement,
     onStationClick?: (target: InteractiveStationTarget) => void,
+    onWorldStateChange?: (
+      anchors: WorldScreenAnchors,
+      hovered: InteractiveStationTarget | null,
+    ) => void,
   ) {
     this.container = container;
     this.onStationClick = onStationClick;
+    this.onWorldStateChange = onWorldStateChange;
     this.clock = new THREE.Clock();
 
-    // 1. Software WebGL detection from GPU renderer string
+    // 1. Software WebGL detection
     this.isSoftwareGl = (() => {
       const probeCanvas = document.createElement('canvas');
       const gl = probeCanvas.getContext('webgl2');
@@ -207,12 +336,13 @@ export class TapriScene3D {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.toneMappingExposure = 0.96;
     this.renderer.setPixelRatio(
       this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2),
     );
-    this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Enable Soft Shadow Maps (PCFShadowMap)
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || window.innerHeight;
@@ -221,19 +351,23 @@ export class TapriScene3D {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xf6c28b);
-    this.scene.fog = new THREE.FogExp2(0xf6c28b, 0.007);
+    this.scene.fog = new THREE.FogExp2(0xf6c28b, 0.0075);
 
     this.camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 80);
     this.camera.position.copy(this.cameraPosCurrent);
     this.camera.lookAt(this.cameraLookCurrent);
 
-    // 2. Mandatory Studio Environment Reflection (RoomEnvironment)
+    // 2. PBR Environment Reflection Map (RoomEnvironment PMREM)
     const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmremGenerator.fromScene(
       new RoomEnvironment(),
-      0.04,
+      0.035,
     ).texture;
+    this.scene.environmentIntensity = 0.28;
     pmremGenerator.dispose();
+
+    // 3. Build Shared PBR Bump/Roughness Textures & Face Expression Maps
+    this.initSharedPBRAndFaceTextures();
 
     this.setupLighting();
     this.buildOutdoorEnvironment();
@@ -245,6 +379,9 @@ export class TapriScene3D {
     this.buildTeaMakerAndCustomers();
     this.buildParticlePools();
 
+    // 4. Setup Cinematic Post-Processing Pipeline (Bloom + DoF + 70s Film Grain)
+    this.setupPostProcessing(width, height);
+
     if (!this.isSoftwareGl) {
       this.renderer.compile(this.scene, this.camera);
     }
@@ -254,24 +391,232 @@ export class TapriScene3D {
     this.startLoop();
   }
 
-  private createWoodTexture(baseHex: string, grainHex: string): THREE.CanvasTexture {
+  private initSharedPBRAndFaceTextures(): void {
+    // 1. Wood Grain Color & Bump Map
+    const woodCanvas = document.createElement('canvas');
+    woodCanvas.width = 256;
+    woodCanvas.height = 256;
+    const wCtx = woodCanvas.getContext('2d')!;
+    wCtx.fillStyle = '#9c5a32';
+    wCtx.fillRect(0, 0, 256, 256);
+
+    const bumpCanvas = document.createElement('canvas');
+    bumpCanvas.width = 256;
+    bumpCanvas.height = 256;
+    const bCtx = bumpCanvas.getContext('2d')!;
+    bCtx.fillStyle = '#808080';
+    bCtx.fillRect(0, 0, 256, 256);
+
+    for (let i = 0; i < 64; i++) {
+      const y = (i * 4.1) % 256;
+      const h = 1.2 + (i % 3);
+      wCtx.fillStyle = i % 2 === 0 ? '#78401e' : '#b26b3f';
+      wCtx.fillRect(0, y, 256, h);
+      bCtx.fillStyle = i % 2 === 0 ? '#505050' : '#b8b8b8';
+      bCtx.fillRect(0, y, 256, h);
+    }
+    this.woodColorTex = new THREE.CanvasTexture(woodCanvas);
+    this.woodColorTex.colorSpace = THREE.SRGBColorSpace;
+    this.woodColorTex.wrapS = THREE.RepeatWrapping;
+    this.woodColorTex.wrapT = THREE.RepeatWrapping;
+    this.woodColorTex.repeat.set(3, 1);
+
+    this.woodBumpTex = new THREE.CanvasTexture(bumpCanvas);
+    this.woodBumpTex.wrapS = THREE.RepeatWrapping;
+    this.woodBumpTex.wrapT = THREE.RepeatWrapping;
+    this.woodBumpTex.repeat.set(3, 1);
+
+    // 2. Matte Terracotta Clay Kulhad Porous Micro-Grain Bump Map
+    const clayCanvas = document.createElement('canvas');
+    clayCanvas.width = 128;
+    clayCanvas.height = 128;
+    const cCtx = clayCanvas.getContext('2d')!;
+    cCtx.fillStyle = '#808080';
+    cCtx.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 900; i++) {
+      const gx = (i * 73) % 128;
+      const gy = (i * 41) % 128;
+      cCtx.fillStyle = i % 2 === 0 ? '#454545' : '#c2c2c2';
+      cCtx.fillRect(gx, gy, 2, 2);
+    }
+    this.clayBumpTex = new THREE.CanvasTexture(clayCanvas);
+    this.clayBumpTex.wrapS = THREE.RepeatWrapping;
+    this.clayBumpTex.wrapT = THREE.RepeatWrapping;
+
+    // 3. Brushed Spun-Brass Bump Map for Patila & Mortar
+    const brassCanvas = document.createElement('canvas');
+    brassCanvas.width = 128;
+    brassCanvas.height = 128;
+    const brCtx = brassCanvas.getContext('2d')!;
+    brCtx.fillStyle = '#808080';
+    brCtx.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 2) {
+      brCtx.fillStyle = y % 4 === 0 ? '#686868' : '#989898';
+      brCtx.fillRect(0, y, 128, 1);
+    }
+    this.brassBumpTex = new THREE.CanvasTexture(brassCanvas);
+    this.brassBumpTex.wrapS = THREE.RepeatWrapping;
+    this.brassBumpTex.wrapT = THREE.RepeatWrapping;
+
+    // 4. Procedural Facial Expression Textures ('neutral', 'blink', 'happy', 'focused', 'surprised')
+    const expressions: FacialExpression[] = [
+      'neutral',
+      'blink',
+      'happy',
+      'focused',
+      'surprised',
+    ];
+    const texMap = {} as Record<FacialExpression, THREE.CanvasTexture>;
+    expressions.forEach((expr) => {
+      texMap[expr] = this.createFacialExpressionTexture(expr);
+    });
+    this.faceTextures = texMap;
+  }
+
+  private createFacialExpressionTexture(expr: FacialExpression): THREE.CanvasTexture {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
     canvas.height = 256;
     const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = baseHex;
-    ctx.fillRect(0, 0, 256, 256);
-    ctx.fillStyle = grainHex;
-    for (let i = 0; i < 48; i++) {
-      const y = (i * 5.5) % 256;
-      ctx.fillRect(0, y, 256, 1.5 + (i % 3));
+    ctx.clearRect(0, 0, 256, 256);
+
+    ctx.strokeStyle = '#1e1610';
+    ctx.fillStyle = '#1e1610';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Eyebrows
+    ctx.lineWidth = 7;
+    if (expr === 'focused') {
+      // Determined angled brows
+      ctx.beginPath();
+      ctx.moveTo(62, 78);
+      ctx.lineTo(104, 90);
+      ctx.moveTo(194, 78);
+      ctx.lineTo(152, 90);
+      ctx.stroke();
+    } else if (expr === 'happy') {
+      // Raised cheerful arched brows
+      ctx.beginPath();
+      ctx.arc(84, 88, 22, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(172, 88, 22, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.stroke();
+    } else if (expr === 'surprised') {
+      ctx.beginPath();
+      ctx.arc(84, 78, 22, Math.PI * 1.1, Math.PI * 1.9);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(172, 78, 22, Math.PI * 1.1, Math.PI * 1.9);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(64, 84);
+      ctx.quadraticCurveTo(84, 76, 104, 84);
+      ctx.moveTo(152, 84);
+      ctx.quadraticCurveTo(172, 76, 192, 84);
+      ctx.stroke();
     }
+
+    // Eyes
+    if (expr === 'blink') {
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.moveTo(66, 114);
+      ctx.quadraticCurveTo(84, 122, 102, 114);
+      ctx.moveTo(154, 114);
+      ctx.quadraticCurveTo(172, 122, 190, 114);
+      ctx.stroke();
+    } else if (expr === 'happy') {
+      // Joyful curved smiling eyes (^ ^)
+      ctx.lineWidth = 9;
+      ctx.beginPath();
+      ctx.arc(84, 120, 16, Math.PI * 1.1, Math.PI * 1.9);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(172, 120, 16, Math.PI * 1.1, Math.PI * 1.9);
+      ctx.stroke();
+    } else {
+      // Open pupils with warm catchlight
+      const r = expr === 'surprised' ? 16 : 13;
+      [84, 172].forEach((ex) => {
+        ctx.fillStyle = '#1e1610';
+        ctx.beginPath();
+        ctx.arc(ex, 112, r, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#fffbeb';
+        ctx.beginPath();
+        ctx.arc(ex - 4, 107, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Warm Rosy Cheeks when Happy
+    if (expr === 'happy') {
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(54, 146, 16, 10, 0, 0, Math.PI * 2);
+      ctx.ellipse(202, 146, 16, 10, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Mouth / Smile below nose
+    ctx.strokeStyle = '#451a03';
+    ctx.lineWidth = 7;
+    if (expr === 'happy') {
+      ctx.fillStyle = '#7c2d12';
+      ctx.beginPath();
+      ctx.arc(128, 174, 24, 0.08 * Math.PI, 0.92 * Math.PI, false);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else if (expr === 'surprised') {
+      ctx.fillStyle = '#451a03';
+      ctx.beginPath();
+      ctx.ellipse(128, 184, 11, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (expr === 'focused') {
+      ctx.beginPath();
+      ctx.moveTo(110, 182);
+      ctx.quadraticCurveTo(128, 179, 146, 182);
+      ctx.stroke();
+    } else {
+      // Gentle welcoming smile
+      ctx.beginPath();
+      ctx.moveTo(106, 178);
+      ctx.quadraticCurveTo(128, 192, 150, 178);
+      ctx.stroke();
+    }
+
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
     return tex;
+  }
+
+  private setupPostProcessing(width: number, height: number): void {
+    this.composer = new EffectComposer(this.renderer);
+
+    const renderPass = new RenderPass(this.scene, this.camera);
+    this.composer.addPass(renderPass);
+
+    // Soft Warm Bloom on the hanging bulb, stove flames & festive lanterns (high threshold so diffuse surfaces stay crisp)
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(width, height),
+      0.16, // strength
+      0.42, // radius
+      1.45, // threshold
+    );
+    this.composer.addPass(this.bloomPass);
+
+    // Subtle Background Depth of Field (DoF) + Animated 70s Film Grain
+    this.dofGrainPass = new ShaderPass(CinematicDoFAndGrainShader);
+    this.dofGrainPass.uniforms.uResolution.value.set(width, height);
+    this.composer.addPass(this.dofGrainPass);
+
+    const outputPass = new OutputPass();
+    this.composer.addPass(outputPass);
   }
 
   private createStripedAwningTexture(): THREE.CanvasTexture {
@@ -308,36 +653,45 @@ export class TapriScene3D {
   }
 
   private setupLighting(): void {
-    this.hemiLight = new THREE.HemisphereLight(0xfff3db, 0x7c3f23, 1.15);
+    this.hemiLight = new THREE.HemisphereLight(0xfff3db, 0x7c3f23, 0.85);
     this.hemiLight.position.set(0, 15, 0);
     this.scene.add(this.hemiLight);
 
-    this.keyLight = new THREE.DirectionalLight(0xffe0b2, 2.3);
-    this.keyLight.position.set(6, 11, 7);
-    this.keyLight.castShadow = !this.isSoftwareGl;
-    this.keyLight.shadow.mapSize.width = 1024;
-    this.keyLight.shadow.mapSize.height = 1024;
-    const d = 6.5;
+    this.keyLight = new THREE.DirectionalLight(0xffe0b2, 1.55);
+    this.keyLight.position.set(5.5, 10.5, 6.5);
+    this.keyLight.castShadow = true;
+    this.keyLight.shadow.mapSize.width = this.isSoftwareGl ? 512 : 1024;
+    this.keyLight.shadow.mapSize.height = this.isSoftwareGl ? 512 : 1024;
+    this.keyLight.shadow.radius = 4.5; // Diffused soft shadow edges
+    const d = 6.2;
     this.keyLight.shadow.camera.left = -d;
     this.keyLight.shadow.camera.right = d;
     this.keyLight.shadow.camera.top = d;
     this.keyLight.shadow.camera.bottom = -d;
     this.keyLight.shadow.camera.near = 1;
-    this.keyLight.shadow.camera.far = 25;
-    this.keyLight.shadow.bias = -0.0005;
+    this.keyLight.shadow.camera.far = 24;
+    this.keyLight.shadow.bias = -0.0006;
     this.keyLight.shadow.normalBias = 0.02;
     this.scene.add(this.keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0xffb76b, 0.9);
+    const rimLight = new THREE.DirectionalLight(0xffb76b, 0.72);
     rimLight.position.set(-5, 6, -8);
     this.scene.add(rimLight);
 
-    this.stoveFlameLight = new THREE.PointLight(0xff7b29, 1.6, 4.5, 2);
-    this.stoveFlameLight.position.set(0, 1.32, 0.28);
+    this.stoveFlameLight = new THREE.PointLight(0xff7b29, 1.35, 4.5, 1.8);
+    this.stoveFlameLight.position.set(0, 1.35, 0.28);
     this.scene.add(this.stoveFlameLight);
 
-    this.festivalLight = new THREE.PointLight(0xffbe55, 1.5, 9, 1.8);
-    this.festivalLight.position.set(0, 3.2, 0.2);
+    // Cursor-reactive hanging bulb light with soft shadow casting onto the counter
+    this.festivalLight = new THREE.PointLight(0xffc966, 1.25, 9.5, 1.6);
+    this.festivalLight.position.set(0, 3.25, 0.25);
+    if (!this.isSoftwareGl) {
+      this.festivalLight.castShadow = true;
+      this.festivalLight.shadow.mapSize.width = 512;
+      this.festivalLight.shadow.mapSize.height = 512;
+      this.festivalLight.shadow.radius = 5.0;
+      this.festivalLight.shadow.bias = -0.001;
+    }
     this.scene.add(this.festivalLight);
   }
 
@@ -347,13 +701,12 @@ export class TapriScene3D {
     const groundMat = new THREE.MeshStandardMaterial({
       color: 0xc98a5b,
       roughness: 0.92,
-      metalness: 0.05,
+      metalness: 0.04,
     });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.receiveShadow = true;
     this.scene.add(ground);
 
-    // Front Customer Footpath / Stepping Stones leading up to the counter
     const pathGeo = new THREE.PlaneGeometry(18, 2.2);
     pathGeo.rotateX(-Math.PI / 2);
     const pathMat = new THREE.MeshStandardMaterial({
@@ -366,7 +719,6 @@ export class TapriScene3D {
     customerPath.receiveShadow = true;
     this.scene.add(customerPath);
 
-    // Raised Tapri Brick Platform
     const platformGeo = new THREE.BoxGeometry(8.8, 0.14, 3.4);
     const platformMat = new THREE.MeshStandardMaterial({
       color: 0xa44a28,
@@ -378,7 +730,6 @@ export class TapriScene3D {
     platform.receiveShadow = true;
     this.scene.add(platform);
 
-    // Background Banyan / Neem Trees
     this.buildTree(-6.2, -4.4, 1.25);
     this.buildTree(6.4, -4.6, 1.15);
     this.buildTree(-3.8, -6.8, 0.95);
@@ -389,13 +740,13 @@ export class TapriScene3D {
     scooter.rotation.y = 0.48;
     const scooterBodyMat = new THREE.MeshStandardMaterial({
       color: 0x3b7a57,
-      roughness: 0.35,
-      metalness: 0.3,
+      roughness: 0.28,
+      metalness: 0.45,
     });
     const chromeMat = new THREE.MeshStandardMaterial({
-      color: 0xe5e7eb,
-      roughness: 0.2,
-      metalness: 0.85,
+      color: 0xf1f5f9,
+      roughness: 0.14,
+      metalness: 0.92,
     });
     const tireMat = new THREE.MeshStandardMaterial({
       color: 0x1f2937,
@@ -427,7 +778,7 @@ export class TapriScene3D {
     this.addContactShadow(scooter, 0.9, 0.01);
     this.scene.add(scooter);
 
-    // Multilayered Parallax Indian Street Scene (Far Temple/Haveli Horizon + Mid Bazaar Streetlamps)
+    // Multilayered Parallax Indian Street Scene
     this.parallaxFarGroup = new THREE.Group();
     const farSilMat = new THREE.MeshStandardMaterial({
       color: 0xb87648,
@@ -459,14 +810,14 @@ export class TapriScene3D {
     this.parallaxMidGroup = new THREE.Group();
     const postMat = new THREE.MeshStandardMaterial({
       color: 0x3e2723,
-      roughness: 0.6,
-      metalness: 0.4,
+      roughness: 0.5,
+      metalness: 0.55,
     });
     const lampGlowMat = new THREE.MeshStandardMaterial({
       color: 0xfffbeb,
       emissive: 0xfbbf24,
-      emissiveIntensity: 1.4,
-      roughness: 0.2,
+      emissiveIntensity: 2.2,
+      roughness: 0.15,
     });
     [-4.8, 4.8].forEach((lx) => {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 3.8, 8), postMat);
@@ -515,42 +866,47 @@ export class TapriScene3D {
   }
 
   private buildTapriCounterAndCanopy(): void {
-    const woodTex = this.createWoodTexture('#6e3b1e', '#4d2611');
-    const lightWoodTex = this.createWoodTexture('#9c5a32', '#78401e');
     const awningTex = this.createStripedAwningTexture();
-
     const counterGroup = new THREE.Group();
 
-    // Main Teakwood Counter Table
+    // Main Teakwood Counter Table with PBR Grain Bump-Map & Roughness Map
     const counterTopGeo = new THREE.BoxGeometry(8.2, 0.16, 1.85);
     const counterTopMat = new THREE.MeshStandardMaterial({
-      map: lightWoodTex,
-      color: 0xffffff,
-      roughness: 0.55,
+      map: this.woodColorTex,
+      bumpMap: this.woodBumpTex,
+      bumpScale: 0.032,
+      roughnessMap: this.woodBumpTex,
+      roughness: 0.54,
       metalness: 0.08,
+      envMapIntensity: 1.1,
     });
     const counterTop = new THREE.Mesh(counterTopGeo, counterTopMat);
     counterTop.position.set(0, 1.02, 0.25);
     counterTop.receiveShadow = true;
-    counterTop.castShadow = !this.isSoftwareGl;
+    counterTop.castShadow = true;
     counterGroup.add(counterTop);
 
-    // Counter Base Front Panel
+    // Counter Base Front Panel with PBR Wood Grain Bump-Map
     const counterBaseGeo = new THREE.BoxGeometry(7.9, 0.86, 1.65);
     const counterBaseMat = new THREE.MeshStandardMaterial({
-      map: woodTex,
-      color: 0xffffff,
-      roughness: 0.78,
+      map: this.woodColorTex,
+      bumpMap: this.woodBumpTex,
+      bumpScale: 0.028,
+      color: 0xd6b498,
+      roughness: 0.72,
     });
     const counterBase = new THREE.Mesh(counterBaseGeo, counterBaseMat);
     counterBase.position.set(0, 0.51, 0.25);
     counterBase.receiveShadow = true;
+    counterBase.castShadow = true;
     counterGroup.add(counterBase);
 
     // Bamboo Canopy Pillars
     const bambooMat = new THREE.MeshStandardMaterial({
       color: 0xb8863b,
-      roughness: 0.62,
+      bumpMap: this.woodBumpTex,
+      bumpScale: 0.015,
+      roughness: 0.58,
       metalness: 0.15,
     });
     const pillarPositions = [
@@ -562,10 +918,12 @@ export class TapriScene3D {
     pillarPositions.forEach(([px, py, pz]) => {
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.085, 4.2, 12), bambooMat);
       post.position.set(px, py, pz);
+      post.castShadow = true;
+      post.receiveShadow = true;
       counterGroup.add(post);
     });
 
-    // Striped Tapri Canopy Roof (high enough so Tea Maker & trees are clearly visible)
+    // Striped Tapri Canopy Roof
     const roofGeo = new THREE.BoxGeometry(8.8, 0.12, 3.0);
     const roofMat = new THREE.MeshStandardMaterial({
       map: awningTex,
@@ -577,7 +935,7 @@ export class TapriScene3D {
     roof.rotation.x = 0.14;
     counterGroup.add(roof);
 
-    // 3 Station Mats on the Counter (Visual Framing for Station 1, 2, 3)
+    // 3 Station Mats on the Counter
     const stationPositions = [
       { x: -2.05, z: 0.32, color: 0xb45309 }, // Station 1: Prep
       { x: 0.0, z: 0.26, color: 0x9a3412 },   // Station 2: Stove
@@ -588,7 +946,9 @@ export class TapriScene3D {
         new THREE.BoxGeometry(1.65, 0.025, 1.22),
         new THREE.MeshStandardMaterial({
           color: st.color,
-          roughness: 0.82,
+          roughness: 0.85,
+          bumpMap: this.clayBumpTex,
+          bumpScale: 0.008,
         }),
       );
       matMesh.position.set(st.x, 1.11, st.z);
@@ -596,14 +956,14 @@ export class TapriScene3D {
       counterGroup.add(matMesh);
     });
 
-    // Active Station Guide Ring
-    const ringGeo = new THREE.RingGeometry(0.72, 0.84, 36);
+    // Active Station Guide Ring (Emissive so UnrealBloomPass gives it a soft halo)
+    const ringGeo = new THREE.RingGeometry(0.72, 0.84, 40);
     ringGeo.rotateX(-Math.PI / 2);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0xfbbf24,
+      color: 0xfde047,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.88,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
@@ -612,14 +972,14 @@ export class TapriScene3D {
     this.guideRingMesh.position.set(-2.05, 1.125, 0.32);
     counterGroup.add(this.guideRingMesh);
 
-    // Soft Glowing Hover Outline Ring when hovering over any 3D interactive station
-    const hoverGeo = new THREE.RingGeometry(0.68, 0.92, 36);
+    // Soft Glowing Hover Outline Ring
+    const hoverGeo = new THREE.RingGeometry(0.68, 0.92, 40);
     hoverGeo.rotateX(-Math.PI / 2);
     const hoverMat = new THREE.MeshBasicMaterial({
-      color: 0xfef08a,
+      color: 0xfffbeb,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.78,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
@@ -629,19 +989,19 @@ export class TapriScene3D {
     this.hoverRingMesh.visible = false;
     counterGroup.add(this.hoverRingMesh);
 
-    // Marigold Flower Garland (Genda Phool Toran) & Festive Lanterns Group
+    // Marigold Flower Garland & Festive Lanterns
     this.marigoldGarlandGroup = new THREE.Group();
     const marigoldOrange = new THREE.MeshStandardMaterial({
       color: 0xf97316,
       roughness: 0.65,
-      emissive: 0x7c2d12,
-      emissiveIntensity: 0.2,
+      emissive: 0x9a3412,
+      emissiveIntensity: 0.4,
     });
     const marigoldYellow = new THREE.MeshStandardMaterial({
       color: 0xfacc15,
       roughness: 0.6,
-      emissive: 0x713f12,
-      emissiveIntensity: 0.2,
+      emissive: 0x854d0e,
+      emissiveIntensity: 0.4,
     });
     const puffGeo = new THREE.SphereGeometry(0.1, 10, 10);
     for (let i = 0; i <= 26; i++) {
@@ -659,8 +1019,8 @@ export class TapriScene3D {
         new THREE.MeshStandardMaterial({
           color: 0xffedd5,
           emissive: 0xf59e0b,
-          emissiveIntensity: 0.9,
-          roughness: 0.3,
+          emissiveIntensity: 2.2,
+          roughness: 0.25,
         }),
       );
       lantern.position.set(lx, 3.45, 0.85);
@@ -669,7 +1029,7 @@ export class TapriScene3D {
     this.marigoldGarlandGroup.visible = false;
     counterGroup.add(this.marigoldGarlandGroup);
 
-    // Hanging Warm Glowing Tapri Bulb (Reacts dynamically to mouse/pointer cursor)
+    // Hanging Warm Glowing Tapri Bulb (High emissive for Bloom diffusion)
     this.bulbAssemblyGroup = new THREE.Group();
     this.bulbAssemblyGroup.position.set(0, 4.15, 0.32);
 
@@ -681,11 +1041,14 @@ export class TapriScene3D {
     this.bulbAssemblyGroup.add(cordMesh);
 
     const brassShade = new THREE.Mesh(
-      new THREE.ConeGeometry(0.32, 0.22, 18, 1, true),
+      new THREE.ConeGeometry(0.32, 0.22, 20, 1, true),
       new THREE.MeshStandardMaterial({
-        color: 0xd97706,
-        roughness: 0.28,
-        metalness: 0.78,
+        color: 0xeab308,
+        roughness: 0.18,
+        metalness: 0.92,
+        bumpMap: this.brassBumpTex,
+        bumpScale: 0.006,
+        envMapIntensity: 1.6,
         side: THREE.DoubleSide,
       }),
     );
@@ -693,12 +1056,12 @@ export class TapriScene3D {
     this.bulbAssemblyGroup.add(brassShade);
 
     const filamentBulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.13, 14, 14),
+      new THREE.SphereGeometry(0.135, 16, 16),
       new THREE.MeshStandardMaterial({
         color: 0xfffbeb,
-        emissive: 0xfacc15,
-        emissiveIntensity: 2.2,
-        roughness: 0.15,
+        emissive: 0xfde047,
+        emissiveIntensity: 3.2, // Drives warm bloom diffusion
+        roughness: 0.1,
       }),
     );
     filamentBulb.position.y = -0.82;
@@ -706,27 +1069,28 @@ export class TapriScene3D {
     counterGroup.add(this.bulbAssemblyGroup);
 
     // Cursor-Reactive Warm Light Pool on the Counter Tabletop
-    const poolGeo = new THREE.CircleGeometry(1.85, 32);
+    const poolGeo = new THREE.CircleGeometry(1.9, 32);
     poolGeo.rotateX(-Math.PI / 2);
     const poolMat = new THREE.MeshBasicMaterial({
       color: 0xfef08a,
       transparent: true,
-      opacity: 0.14,
+      opacity: 0.15,
       depthWrite: false,
     });
     this.bulbCounterPoolMesh = new THREE.Mesh(poolGeo, poolMat);
     this.bulbCounterPoolMesh.position.set(0, 1.118, 0.32);
     counterGroup.add(this.bulbCounterPoolMesh);
 
-    // Animated Counter Tea Spill Puddle + Wipe Cloth (Shown when a pour spill occurs)
+    // Animated Counter Tea Spill Puddle + Wipe Cloth
     this.spillPuddleGroup = new THREE.Group();
     this.spillPuddleGroup.position.set(1.32, 1.122, 0.56);
     this.spillPuddleGroup.visible = false;
 
     const spillMat = new THREE.MeshStandardMaterial({
       color: 0xb45309,
-      roughness: 0.12,
-      metalness: 0.15,
+      roughness: 0.08,
+      metalness: 0.2,
+      envMapIntensity: 1.4,
     });
     const mainPuddle = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.5, 0.018, 24), spillMat);
     mainPuddle.scale.set(1.25, 1, 0.82);
@@ -743,13 +1107,18 @@ export class TapriScene3D {
       this.spillPuddleGroup.add(drop);
     });
 
-    // Folded Cotton Wipe Cloth beside the puddle
     this.wipeClothGroup = new THREE.Group();
     this.wipeClothGroup.position.set(-0.35, 0.04, 0.15);
     const clothMesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.34, 0.045, 0.26),
-      new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.85 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xfef3c7,
+        roughness: 0.88,
+        bumpMap: this.clayBumpTex,
+        bumpScale: 0.012,
+      }),
     );
+    clothMesh.castShadow = true;
     const stripeMesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.35, 0.048, 0.05),
       new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.85 }),
@@ -767,24 +1136,28 @@ export class TapriScene3D {
     this.interactables.push(spillHitbox);
 
     counterGroup.add(this.spillPuddleGroup);
-
     this.scene.add(counterGroup);
   }
 
-  // STATION 1: Mortar & Pestle (Khalbatta) + 3 Distinct Spice Bowls (Ginger, Cardamom, Lemon-Tulsi)
+  // STATION 1: Mortar & Pestle (PBR Metallic Brass + Soft Shadows)
   private buildStation1Mortar(): void {
     this.mortarGroup = new THREE.Group();
     this.mortarGroup.position.set(-2.05, 1.12, 0.32);
 
     const brassMortarMat = new THREE.MeshStandardMaterial({
-      color: 0xd49b38,
-      roughness: 0.28,
-      metalness: 0.82,
+      color: 0xeab308,
+      roughness: 0.18,
+      metalness: 0.92,
+      bumpMap: this.brassBumpTex,
+      bumpScale: 0.008,
+      envMapIntensity: 1.75,
     });
     const darkInteriorMat = new THREE.MeshStandardMaterial({
       color: 0x452712,
-      roughness: 0.85,
-      metalness: 0.2,
+      roughness: 0.88,
+      metalness: 0.15,
+      bumpMap: this.clayBumpTex,
+      bumpScale: 0.015,
     });
 
     const points = [
@@ -798,15 +1171,20 @@ export class TapriScene3D {
       new THREE.Vector2(0.25, 0.14),
       new THREE.Vector2(0, 0.14),
     ];
-    const mortarGeo = new THREE.LatheGeometry(points, 28);
+    const mortarGeo = new THREE.LatheGeometry(points, 32);
     const mortarMesh = new THREE.Mesh(mortarGeo, brassMortarMat);
-    mortarMesh.castShadow = !this.isSoftwareGl;
+    mortarMesh.castShadow = true;
     mortarMesh.receiveShadow = true;
     this.mortarGroup.add(mortarMesh);
 
     const waistRing = new THREE.Mesh(
       new THREE.TorusGeometry(0.29, 0.022, 10, 28),
-      new THREE.MeshStandardMaterial({ color: 0xfde047, roughness: 0.2, metalness: 0.9 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xfef08a,
+        roughness: 0.12,
+        metalness: 0.96,
+        envMapIntensity: 1.9,
+      }),
     );
     waistRing.rotation.x = Math.PI / 2;
     waistRing.position.y = 0.26;
@@ -814,7 +1192,12 @@ export class TapriScene3D {
 
     this.spiceFillMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.24, 0.18, 0.12, 20),
-      new THREE.MeshStandardMaterial({ color: 0xd99b26, roughness: 0.75 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xd99b26,
+        roughness: 0.85,
+        bumpMap: this.clayBumpTex,
+        bumpScale: 0.02,
+      }),
     );
     this.spiceFillMesh.position.y = 0.17;
     this.mortarGroup.add(this.spiceFillMesh);
@@ -825,7 +1208,7 @@ export class TapriScene3D {
         new THREE.DodecahedronGeometry(0.06, 0),
         new THREE.MeshStandardMaterial({
           color: chunkColors[i % chunkColors.length],
-          roughness: 0.7,
+          roughness: 0.78,
         }),
       );
       const angle = (i / 5) * Math.PI * 2;
@@ -843,11 +1226,17 @@ export class TapriScene3D {
       brassMortarMat,
     );
     pestleShaft.position.y = 0.17;
+    pestleShaft.castShadow = true;
     this.pestleGroup.add(pestleShaft);
 
     const pestleCrown = new THREE.Mesh(
       new THREE.SphereGeometry(0.075, 14, 14),
-      new THREE.MeshStandardMaterial({ color: 0xfef08a, roughness: 0.18, metalness: 0.92 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xfef08a,
+        roughness: 0.12,
+        metalness: 0.96,
+        envMapIntensity: 1.9,
+      }),
     );
     pestleCrown.position.y = 0.47;
     this.pestleGroup.add(pestleCrown);
@@ -857,9 +1246,9 @@ export class TapriScene3D {
 
     // Three Spice Katori Bowls around the Mortar
     const katoriSpecs = [
-      { x: -0.52, z: 0.26, spiceColor: 0xd69e4c }, // Ginger
-      { x: -0.52, z: -0.24, spiceColor: 0x65a30d }, // Cardamom
-      { x: 0.52, z: -0.24, spiceColor: 0xeab308 }, // Lemon/Tulsi
+      { x: -0.52, z: 0.26, spiceColor: 0xd69e4c },
+      { x: -0.52, z: -0.24, spiceColor: 0x65a30d },
+      { x: 0.52, z: -0.24, spiceColor: 0xeab308 },
     ];
     katoriSpecs.forEach((spec) => {
       const bowl = new THREE.Mesh(
@@ -867,6 +1256,8 @@ export class TapriScene3D {
         darkInteriorMat,
       );
       bowl.position.set(spec.x, 0.05, spec.z);
+      bowl.castShadow = true;
+      bowl.receiveShadow = true;
       this.mortarGroup.add(bowl);
 
       for (let j = 0; j < 4; j++) {
@@ -896,29 +1287,42 @@ export class TapriScene3D {
     this.scene.add(this.mortarGroup);
   }
 
-  // STATION 2: Gas Stove & Brass Patila + Milk Canister, Tea Leaves Jar & Sugar Bowl
+  // STATION 2: Gas Stove & Reflective Metallic PBR Brass Patila
   private buildStation2Stove(): void {
     this.stoveGroup = new THREE.Group();
     this.stoveGroup.position.set(0.0, 1.12, 0.26);
 
     const stoveFrame = new THREE.Mesh(
       new THREE.BoxGeometry(1.0, 0.15, 0.84),
-      new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.45, metalness: 0.65 }),
+      new THREE.MeshStandardMaterial({
+        color: 0x334155,
+        roughness: 0.35,
+        metalness: 0.78,
+        envMapIntensity: 1.4,
+      }),
     );
     stoveFrame.position.y = 0.075;
+    stoveFrame.castShadow = true;
+    stoveFrame.receiveShadow = true;
     this.stoveGroup.add(stoveFrame);
 
     const burnerGrate = new THREE.Mesh(
       new THREE.CylinderGeometry(0.34, 0.38, 0.06, 16),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7, metalness: 0.4 }),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.65, metalness: 0.5 }),
     );
     burnerGrate.position.y = 0.17;
     this.stoveGroup.add(burnerGrate);
 
-    const flameMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+    // High-emissive burner flames for Bloom glow
+    const flameMat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0ea5e9,
+      emissiveIntensity: 2.6,
+      roughness: 0.1,
+    });
     for (let i = 0; i < 12; i++) {
       const angle = (i / 12) * Math.PI * 2;
-      const flame = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.085, 6), flameMat);
+      const flame = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.09, 6), flameMat);
       flame.position.set(Math.cos(angle) * 0.26, 0.2, Math.sin(angle) * 0.26);
       this.stoveGroup.add(flame);
       this.flameMeshes.push(flame);
@@ -927,10 +1331,14 @@ export class TapriScene3D {
     this.patilaGroup = new THREE.Group();
     this.patilaGroup.position.y = 0.2;
 
+    // Authentic PBR Metallic Spun-Brass Patila with Environment Reflections
     const patilaBrassMat = new THREE.MeshStandardMaterial({
-      color: 0xeab308,
-      roughness: 0.22,
-      metalness: 0.88,
+      color: 0xfbbf24,
+      roughness: 0.15,
+      metalness: 0.94,
+      bumpMap: this.brassBumpTex,
+      bumpScale: 0.008,
+      envMapIntensity: 1.85,
     });
     const patilaPoints = [
       new THREE.Vector2(0, 0),
@@ -943,10 +1351,11 @@ export class TapriScene3D {
       new THREE.Vector2(0.33, 0.43),
     ];
     const patilaBody = new THREE.Mesh(
-      new THREE.LatheGeometry(patilaPoints, 32),
+      new THREE.LatheGeometry(patilaPoints, 36),
       patilaBrassMat,
     );
-    patilaBody.castShadow = !this.isSoftwareGl;
+    patilaBody.castShadow = true;
+    patilaBody.receiveShadow = true;
     this.patilaGroup.add(patilaBody);
 
     [-1, 1].forEach((dir) => {
@@ -956,13 +1365,19 @@ export class TapriScene3D {
       );
       handle.position.set(dir * 0.4, 0.32, 0);
       handle.rotation.z = -dir * (Math.PI / 2);
+      handle.castShadow = true;
       this.patilaGroup.add(handle);
     });
 
     this.royalCrownGroup = new THREE.Group();
     const royalSpout = new THREE.Mesh(
       new THREE.ConeGeometry(0.055, 0.24, 12),
-      new THREE.MeshStandardMaterial({ color: 0xfef08a, roughness: 0.15, metalness: 0.95 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xfef08a,
+        roughness: 0.12,
+        metalness: 0.96,
+        envMapIntensity: 2.0,
+      }),
     );
     royalSpout.position.set(0.45, 0.36, 0);
     royalSpout.rotation.z = -0.8;
@@ -970,7 +1385,12 @@ export class TapriScene3D {
 
     const royalBelt = new THREE.Mesh(
       new THREE.TorusGeometry(0.43, 0.022, 10, 32),
-      new THREE.MeshStandardMaterial({ color: 0xfef08a, roughness: 0.15, metalness: 0.95 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xfef08a,
+        roughness: 0.12,
+        metalness: 0.96,
+        envMapIntensity: 2.0,
+      }),
     );
     royalBelt.rotation.x = Math.PI / 2;
     royalBelt.position.y = 0.24;
@@ -980,8 +1400,9 @@ export class TapriScene3D {
 
     this.liquidMaterial = new THREE.MeshStandardMaterial({
       color: 0x4ea8de,
-      roughness: 0.18,
-      metalness: 0.1,
+      roughness: 0.14,
+      metalness: 0.12,
+      envMapIntensity: 1.3,
     });
     this.liquidSurfaceMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.34, 0.33, 0.06, 28),
@@ -992,7 +1413,7 @@ export class TapriScene3D {
 
     const bubbleMat = new THREE.MeshStandardMaterial({
       color: 0xfde68a,
-      roughness: 0.3,
+      roughness: 0.25,
     });
     for (let i = 0; i < 10; i++) {
       const bubble = new THREE.Mesh(new THREE.SphereGeometry(0.038, 10, 10), bubbleMat);
@@ -1006,26 +1427,45 @@ export class TapriScene3D {
 
     this.stoveGroup.add(this.patilaGroup);
 
-    // Flanking Ingredient Vessels on the Table: Milk Dolchi Canister, Assam Tea Jar & Sugar Bowl
+    // Flanking Ingredient Vessels with PBR Metallic & Ceramic finishes
     const milkCan = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.13, 0.17, 0.38, 18),
-      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.25, metalness: 0.8 }),
+      new THREE.CylinderGeometry(0.13, 0.17, 0.38, 20),
+      new THREE.MeshStandardMaterial({
+        color: 0xf1f5f9,
+        roughness: 0.18,
+        metalness: 0.9,
+        envMapIntensity: 1.6,
+      }),
     );
     milkCan.position.set(-0.64, 0.19, -0.2);
+    milkCan.castShadow = true;
+    milkCan.receiveShadow = true;
     this.stoveGroup.add(milkCan);
 
     const teaJar = new THREE.Mesh(
       new THREE.CylinderGeometry(0.13, 0.13, 0.32, 16),
-      new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.55 }),
+      new THREE.MeshStandardMaterial({
+        color: 0x451a03,
+        roughness: 0.5,
+        metalness: 0.15,
+      }),
     );
     teaJar.position.set(0.64, 0.16, -0.2);
+    teaJar.castShadow = true;
+    teaJar.receiveShadow = true;
     this.stoveGroup.add(teaJar);
 
     const sugarBowl = new THREE.Mesh(
       new THREE.CylinderGeometry(0.12, 0.1, 0.16, 16),
-      new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.4 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xfef3c7,
+        roughness: 0.32,
+        metalness: 0.08,
+      }),
     );
     sugarBowl.position.set(0.64, 0.08, 0.24);
+    sugarBowl.castShadow = true;
+    sugarBowl.receiveShadow = true;
     this.stoveGroup.add(sugarBowl);
 
     const hitProxy = new THREE.Mesh(
@@ -1040,22 +1480,31 @@ export class TapriScene3D {
     this.scene.add(this.stoveGroup);
   }
 
-  // STATION 3: Serving Tray, Clay Kulhad, Cutting Glass & 3D Snacks
+  // STATION 3: Serving Tray, Rough Matte Clay Kulhad, Cutting Glass & 3D Snacks
   private buildStation3Tray(): void {
     this.trayGroup = new THREE.Group();
     this.trayGroup.position.set(2.05, 1.12, 0.34);
 
     const trayBase = new THREE.Mesh(
       new THREE.BoxGeometry(1.3, 0.045, 0.88),
-      new THREE.MeshStandardMaterial({ color: 0x7c3f1d, roughness: 0.55 }),
+      new THREE.MeshStandardMaterial({
+        map: this.woodColorTex,
+        bumpMap: this.woodBumpTex,
+        bumpScale: 0.018,
+        color: 0x9a5830,
+        roughness: 0.48,
+      }),
     );
     trayBase.position.y = 0.022;
+    trayBase.castShadow = true;
+    trayBase.receiveShadow = true;
     this.trayGroup.add(trayBase);
 
     const brassRimMat = new THREE.MeshStandardMaterial({
-      color: 0xd97706,
-      roughness: 0.28,
-      metalness: 0.82,
+      color: 0xeab308,
+      roughness: 0.18,
+      metalness: 0.9,
+      envMapIntensity: 1.7,
     });
     [-0.62, 0.62].forEach((hx) => {
       const handle = new THREE.Mesh(
@@ -1067,22 +1516,28 @@ export class TapriScene3D {
       this.trayGroup.add(handle);
     });
 
+    // Rough Matte Terracotta Clay Kulhad with Porous Clay Bump-Map
     this.kulhadGroup = new THREE.Group();
     this.kulhadGroup.position.set(-0.26, 0.045, 0.04);
     const terracottaMat = new THREE.MeshStandardMaterial({
       color: 0xc25934,
-      roughness: 0.82,
-      metalness: 0.04,
+      roughness: 0.92,
+      metalness: 0.02,
+      bumpMap: this.clayBumpTex,
+      bumpScale: 0.024,
+      roughnessMap: this.clayBumpTex,
     });
     const kulhadBody = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15, 0.1, 0.3, 20),
+      new THREE.CylinderGeometry(0.15, 0.1, 0.3, 24),
       terracottaMat,
     );
     kulhadBody.position.y = 0.15;
+    kulhadBody.castShadow = true;
+    kulhadBody.receiveShadow = true;
     this.kulhadGroup.add(kulhadBody);
 
     const kulhadLip = new THREE.Mesh(
-      new THREE.TorusGeometry(0.15, 0.016, 8, 20),
+      new THREE.TorusGeometry(0.15, 0.016, 8, 24),
       terracottaMat,
     );
     kulhadLip.rotation.x = Math.PI / 2;
@@ -1094,24 +1549,25 @@ export class TapriScene3D {
     this.cuttingGlassGroup.position.set(-0.26, 0.045, 0.04);
     const glassMat = new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
-      roughness: 0.12,
+      roughness: 0.1,
       metalness: 0.05,
       transmission: this.isSoftwareGl ? 0 : 0.85,
       transparent: true,
-      opacity: this.isSoftwareGl ? 0.42 : 1,
+      opacity: this.isSoftwareGl ? 0.45 : 1,
     });
     const glassBody = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.14, 0.1, 0.31, 12),
+      new THREE.CylinderGeometry(0.14, 0.1, 0.31, 14),
       glassMat,
     );
     glassBody.position.y = 0.155;
+    glassBody.castShadow = true;
     this.cuttingGlassGroup.add(glassBody);
     this.cuttingGlassGroup.visible = false;
     this.trayGroup.add(this.cuttingGlassGroup);
 
     this.cupLiquidMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.135, 0.1, 0.25, 18),
-      new THREE.MeshStandardMaterial({ color: 0xc86d28, roughness: 0.25 }),
+      new THREE.MeshStandardMaterial({ color: 0xc86d28, roughness: 0.2 }),
     );
     this.cupLiquidMesh.position.set(-0.26, 0.2, 0.04);
     this.cupLiquidMesh.visible = false;
@@ -1124,7 +1580,7 @@ export class TapriScene3D {
     );
     this.pourArcMesh = new THREE.Mesh(
       new THREE.TubeGeometry(curve, 16, 0.03, 8, false),
-      new THREE.MeshStandardMaterial({ color: 0xc86d28, roughness: 0.2 }),
+      new THREE.MeshStandardMaterial({ color: 0xc86d28, roughness: 0.18 }),
     );
     this.pourArcMesh.visible = false;
     this.trayGroup.add(this.pourArcMesh);
@@ -1134,16 +1590,24 @@ export class TapriScene3D {
       brassRimMat,
     );
     snackPlate.position.set(0.25, 0.06, 0.02);
+    snackPlate.castShadow = true;
+    snackPlate.receiveShadow = true;
     this.trayGroup.add(snackPlate);
 
     // Snack 4A: Parle-G Biscuits
     this.snackParleGroup = new THREE.Group();
     this.snackParleGroup.position.set(0.25, 0.085, 0.02);
-    const biscuitMat = new THREE.MeshStandardMaterial({ color: 0xd99343, roughness: 0.65 });
+    const biscuitMat = new THREE.MeshStandardMaterial({
+      color: 0xd99343,
+      roughness: 0.72,
+      bumpMap: this.clayBumpTex,
+      bumpScale: 0.01,
+    });
     for (let i = 0; i < 3; i++) {
       const biscuit = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.035, 0.14), biscuitMat);
       biscuit.position.y = i * 0.038;
       biscuit.rotation.y = (i - 1) * 0.18;
+      biscuit.castShadow = true;
       this.snackParleGroup.add(biscuit);
     }
     this.snackParleGroup.visible = false;
@@ -1152,12 +1616,18 @@ export class TapriScene3D {
     // Snack 4B: Hot Samosas
     this.snackSamosaGroup = new THREE.Group();
     this.snackSamosaGroup.position.set(0.25, 0.13, 0.02);
-    const samosaMat = new THREE.MeshStandardMaterial({ color: 0xc87d28, roughness: 0.72 });
+    const samosaMat = new THREE.MeshStandardMaterial({
+      color: 0xc87d28,
+      roughness: 0.78,
+      bumpMap: this.clayBumpTex,
+      bumpScale: 0.014,
+    });
     [-0.085, 0.085].forEach((sx, idx) => {
       const samosa = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.21, 4), samosaMat);
       samosa.position.set(sx, 0, idx === 0 ? -0.03 : 0.04);
       samosa.rotation.y = idx * 0.8;
       samosa.rotation.z = idx === 0 ? 0.18 : -0.18;
+      samosa.castShadow = true;
       this.snackSamosaGroup.add(samosa);
     });
     this.snackSamosaGroup.visible = false;
@@ -1166,11 +1636,17 @@ export class TapriScene3D {
     // Snack 4C: Crispy Monsoon Pakoras
     this.snackPakoraGroup = new THREE.Group();
     this.snackPakoraGroup.position.set(0.25, 0.1, 0.02);
-    const pakoraMat = new THREE.MeshStandardMaterial({ color: 0xb4691e, roughness: 0.85 });
+    const pakoraMat = new THREE.MeshStandardMaterial({
+      color: 0xb4691e,
+      roughness: 0.88,
+      bumpMap: this.clayBumpTex,
+      bumpScale: 0.018,
+    });
     for (let i = 0; i < 6; i++) {
       const pakora = new THREE.Mesh(new THREE.DodecahedronGeometry(0.065, 0), pakoraMat);
       const a = (i / 6) * Math.PI * 2;
       pakora.position.set(Math.cos(a) * 0.085, (i % 2) * 0.045, Math.sin(a) * 0.085);
+      pakora.castShadow = true;
       this.snackPakoraGroup.add(pakora);
     }
     this.snackPakoraGroup.visible = false;
@@ -1179,10 +1655,11 @@ export class TapriScene3D {
     // Snack 4D: Festive Diwali Mithai
     this.snackMithaiGroup = new THREE.Group();
     this.snackMithaiGroup.position.set(0.25, 0.11, 0.02);
-    const jamunMat = new THREE.MeshStandardMaterial({ color: 0x6b240c, roughness: 0.22 });
+    const jamunMat = new THREE.MeshStandardMaterial({ color: 0x6b240c, roughness: 0.18 });
     [-0.075, 0.075].forEach((jx) => {
       const jamun = new THREE.Mesh(new THREE.SphereGeometry(0.07, 14, 14), jamunMat);
       jamun.position.set(jx, 0, -0.04);
+      jamun.castShadow = true;
       this.snackMithaiGroup.add(jamun);
     });
     const jalebi = new THREE.Mesh(
@@ -1190,8 +1667,8 @@ export class TapriScene3D {
       new THREE.MeshStandardMaterial({
         color: 0xf97316,
         emissive: 0x9a3412,
-        emissiveIntensity: 0.25,
-        roughness: 0.3,
+        emissiveIntensity: 0.45,
+        roughness: 0.25,
       }),
     );
     jalebi.rotation.x = Math.PI / 2;
@@ -1207,10 +1684,12 @@ export class TapriScene3D {
       new THREE.CylinderGeometry(0.24, 0.2, 0.035, 18),
       brassRimMat,
     );
+    displayPlate.castShadow = true;
     this.counterSamosaDisplay.add(displayPlate);
     for (let i = 0; i < 3; i++) {
       const sm = new THREE.Mesh(new THREE.ConeGeometry(0.095, 0.17, 4), samosaMat);
       sm.position.set((i - 1) * 0.095, 0.09, 0);
+      sm.castShadow = true;
       this.counterSamosaDisplay.add(sm);
     }
     this.counterSamosaDisplay.visible = false;
@@ -1236,14 +1715,27 @@ export class TapriScene3D {
 
     const radioCabinet = new THREE.Mesh(
       new THREE.BoxGeometry(0.72, 0.5, 0.34),
-      new THREE.MeshStandardMaterial({ color: 0x6b2d14, roughness: 0.42, metalness: 0.15 }),
+      new THREE.MeshStandardMaterial({
+        color: 0x6b2d14,
+        roughness: 0.38,
+        metalness: 0.18,
+        bumpMap: this.woodBumpTex,
+        bumpScale: 0.015,
+      }),
     );
     radioCabinet.position.y = 0.25;
+    radioCabinet.castShadow = true;
+    radioCabinet.receiveShadow = true;
     this.radioGroup.add(radioCabinet);
 
     const speakerCloth = new THREE.Mesh(
       new THREE.BoxGeometry(0.58, 0.24, 0.02),
-      new THREE.MeshStandardMaterial({ color: 0xe7d3b0, roughness: 0.85 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xe7d3b0,
+        roughness: 0.88,
+        bumpMap: this.clayBumpTex,
+        bumpScale: 0.015,
+      }),
     );
     speakerCloth.position.set(0, 0.31, 0.17);
     this.radioGroup.add(speakerCloth);
@@ -1253,16 +1745,16 @@ export class TapriScene3D {
       new THREE.MeshStandardMaterial({
         color: 0xfef08a,
         emissive: 0xf59e0b,
-        emissiveIntensity: 0.75,
+        emissiveIntensity: 1.8, // Warm radio dial glow
       }),
     );
     dialScale.position.set(0, 0.12, 0.17);
     this.radioGroup.add(dialScale);
 
     const knobMat = new THREE.MeshStandardMaterial({
-      color: 0xd97706,
-      roughness: 0.25,
-      metalness: 0.85,
+      color: 0xeab308,
+      roughness: 0.18,
+      metalness: 0.9,
     });
     [-0.25, 0.25].forEach((kx) => {
       const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, 0.04, 14), knobMat);
@@ -1273,7 +1765,7 @@ export class TapriScene3D {
 
     const antenna = new THREE.Mesh(
       new THREE.CylinderGeometry(0.01, 0.015, 0.6, 8),
-      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.2 }),
+      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.95, roughness: 0.15 }),
     );
     antenna.position.set(0.24, 0.78, -0.05);
     antenna.rotation.z = -0.25;
@@ -1282,7 +1774,7 @@ export class TapriScene3D {
     for (let i = 0; i < 2; i++) {
       const waveRing = new THREE.Mesh(
         new THREE.TorusGeometry(0.13 + i * 0.09, 0.012, 8, 24),
-        new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.7 }),
+        new THREE.MeshBasicMaterial({ color: 0xfde047, transparent: true, opacity: 0.75 }),
       );
       waveRing.position.set(0, 0.72 + i * 0.14, 0);
       this.radioGroup.add(waveRing);
@@ -1306,7 +1798,7 @@ export class TapriScene3D {
 
     const jarGlassMat = new THREE.MeshPhysicalMaterial({
       color: 0xfffbeb,
-      roughness: 0.15,
+      roughness: 0.12,
       transmission: this.isSoftwareGl ? 0 : 0.82,
       transparent: true,
       opacity: this.isSoftwareGl ? 0.38 : 1,
@@ -1317,6 +1809,7 @@ export class TapriScene3D {
     );
     jarBody.position.y = 0.22;
     jarBody.renderOrder = 2;
+    jarBody.castShadow = true;
     gullakGroup.add(jarBody);
 
     const jarLid = new THREE.Mesh(
@@ -1329,8 +1822,8 @@ export class TapriScene3D {
     const coinGeo = new THREE.CylinderGeometry(0.085, 0.085, 0.024, 14);
     const coinMat = new THREE.MeshStandardMaterial({
       color: 0xfacc15,
-      roughness: 0.2,
-      metalness: 0.9,
+      roughness: 0.16,
+      metalness: 0.94,
     });
     for (let i = 0; i < 14; i++) {
       const coin = new THREE.Mesh(coinGeo, coinMat);
@@ -1362,13 +1855,18 @@ export class TapriScene3D {
     this.scene.add(gullakGroup);
   }
 
-  // Reusable Builder for 14-Part 3D Character Rig (with Walking Legs, Arms, Headwear, and Held Kulhad Cup)
+  /**
+   * Reusable Builder for Articulated 3D Character Rig:
+   * - 2-Bone IK Arms (Shoulder -> UpperArm -> Elbow -> Forearm -> Hand)
+   * - Dynamic Face Texture-Swapping Plane on Head
+   * - Soft Shadow Casting
+   */
   private createCharacterRig(): CharacterRig {
     const root = new THREE.Group();
 
     const skinMat = new THREE.MeshStandardMaterial({
       color: 0xd99b72,
-      roughness: 0.65,
+      roughness: 0.62,
     });
     const torsoMat = new THREE.MeshStandardMaterial({
       color: 0xf4ecd8,
@@ -1387,11 +1885,12 @@ export class TapriScene3D {
       roughness: 0.6,
     });
 
-    // 1. Walking Legs & Sandals/Shoes
+    // 1. Walking Legs & Sandals
     const leftLeg = new THREE.Group();
     leftLeg.position.set(-0.15, 0.62, 0);
     const lLegCyl = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.42, 8, 12), trousersMat);
     lLegCyl.position.y = -0.24;
+    lLegCyl.castShadow = true;
     leftLeg.add(lLegCyl);
     const lShoe = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.24), shoeMat);
     lShoe.position.set(0, -0.52, 0.05);
@@ -1402,62 +1901,102 @@ export class TapriScene3D {
     rightLeg.position.set(0.15, 0.62, 0);
     const rLegCyl = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.42, 8, 12), trousersMat);
     rLegCyl.position.y = -0.24;
+    rLegCyl.castShadow = true;
     rightLeg.add(rLegCyl);
     const rShoe = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.24), shoeMat);
     rShoe.position.set(0, -0.52, 0.05);
     rightLeg.add(rShoe);
     root.add(rightLeg);
 
-    // 2. Torso (Kurta / Saree bodice)
+    // 2. Articulated Torso Group (allows subtle lean when reaching with IK)
+    const torsoGroup = new THREE.Group();
+    torsoGroup.position.set(0, 0.62, 0);
+    root.add(torsoGroup);
+
     const torso = new THREE.Mesh(
       new THREE.CylinderGeometry(0.32, 0.39, 1.05, 20),
       torsoMat,
     );
-    torso.position.y = 1.08;
-    torso.castShadow = !this.isSoftwareGl;
-    root.add(torso);
+    torso.position.y = 0.46;
+    torso.castShadow = true;
+    torso.receiveShadow = true;
+    torsoGroup.add(torso);
 
     // 3. Draped Shawl / Gamcha / Saree Pallu
     const palluMesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.68, 0.78, 0.42),
       secondaryMat,
     );
-    palluMesh.position.set(0.04, 1.14, 0.02);
+    palluMesh.position.set(0.04, 0.52, 0.02);
     palluMesh.rotation.z = 0.22;
-    root.add(palluMesh);
+    palluMesh.castShadow = true;
+    torsoGroup.add(palluMesh);
 
-    // 4. Left & Right Arms + Held Kulhad Cup
+    // 4. Articulated 2-Bone IK Left Arm (Shoulder -> Elbow -> Hand)
     const leftArm = new THREE.Group();
-    leftArm.position.set(-0.4, 1.44, 0);
-    const lArmMesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.09, 0.42, 8, 12),
+    leftArm.position.set(-0.38, 0.84, 0);
+    const lUpperMesh = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.082, 0.2, 8, 12),
       torsoMat,
     );
-    lArmMesh.position.y = -0.2;
-    leftArm.add(lArmMesh);
-    const lHand = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 10), skinMat);
-    lHand.position.y = -0.44;
-    leftArm.add(lHand);
-    root.add(leftArm);
+    lUpperMesh.position.y = -0.14;
+    lUpperMesh.castShadow = true;
+    leftArm.add(lUpperMesh);
 
+    const leftElbow = new THREE.Group();
+    leftElbow.position.set(0, -0.28, 0);
+    const lForearmMesh = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.072, 0.2, 8, 12),
+      skinMat,
+    );
+    lForearmMesh.position.y = -0.14;
+    lForearmMesh.castShadow = true;
+    leftElbow.add(lForearmMesh);
+
+    const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.078, 12, 12), skinMat);
+    leftHand.position.set(0, -0.28, 0);
+    leftHand.castShadow = true;
+    leftElbow.add(leftHand);
+    leftArm.add(leftElbow);
+    torsoGroup.add(leftArm);
+
+    // 5. Articulated 2-Bone IK Right Arm (Shoulder -> Elbow -> Hand + Held Kulhad Cup)
     const rightArm = new THREE.Group();
-    rightArm.position.set(0.4, 1.44, 0);
-    const rArmMesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.09, 0.42, 8, 12),
+    rightArm.position.set(0.38, 0.84, 0);
+    const rUpperMesh = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.082, 0.2, 8, 12),
       torsoMat,
     );
-    rArmMesh.position.y = -0.2;
-    rightArm.add(rArmMesh);
-    const rHand = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 10), skinMat);
-    rHand.position.y = -0.44;
-    rightArm.add(rHand);
+    rUpperMesh.position.y = -0.14;
+    rUpperMesh.castShadow = true;
+    rightArm.add(rUpperMesh);
 
-    // Held Clay Kulhad Cup in Right Hand (visible when customer receives tea!)
+    const rightElbow = new THREE.Group();
+    rightElbow.position.set(0, -0.28, 0);
+    const rForearmMesh = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.072, 0.2, 8, 12),
+      skinMat,
+    );
+    rForearmMesh.position.y = -0.14;
+    rForearmMesh.castShadow = true;
+    rightElbow.add(rForearmMesh);
+
+    const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.078, 12, 12), skinMat);
+    rightHand.position.set(0, -0.28, 0);
+    rightHand.castShadow = true;
+    rightElbow.add(rightHand);
+
+    // Held Clay Kulhad Cup in Right Hand
     const heldCupGroup = new THREE.Group();
-    heldCupGroup.position.set(0, -0.44, 0.14);
+    heldCupGroup.position.set(0, -0.28, 0.14);
     const cupMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.095, 0.068, 0.19, 14),
-      new THREE.MeshStandardMaterial({ color: 0xc25934, roughness: 0.8 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xc25934,
+        roughness: 0.9,
+        bumpMap: this.clayBumpTex,
+        bumpScale: 0.02,
+      }),
     );
     heldCupGroup.add(cupMesh);
     const cupTea = new THREE.Mesh(
@@ -1467,54 +2006,61 @@ export class TapriScene3D {
     cupTea.position.y = 0.025;
     heldCupGroup.add(cupTea);
     heldCupGroup.visible = false;
-    rightArm.add(heldCupGroup);
+    rightElbow.add(heldCupGroup);
 
-    root.add(rightArm);
+    rightArm.add(rightElbow);
+    torsoGroup.add(rightArm);
 
-    // 5. Head Group
+    // 6. Head Group with Dynamic Face Texture-Swapping Plane
     const headGroup = new THREE.Group();
-    headGroup.position.set(0, 1.88, 0);
+    headGroup.position.set(0, 1.26, 0);
 
     const headSphere = new THREE.Mesh(
-      new THREE.SphereGeometry(0.28, 22, 22),
+      new THREE.SphereGeometry(0.28, 24, 24),
       skinMat,
     );
+    headSphere.castShadow = true;
+    headSphere.receiveShadow = true;
     headGroup.add(headSphere);
 
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x1e1b18 });
-    [-0.095, 0.095].forEach((ex) => {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 10), eyeMat);
-      eye.position.set(ex, 0.035, 0.255);
-      headGroup.add(eye);
+    // Curved Face Texture Plane for Blinking, Smiling & Focused Expressions
+    const facePlaneGeo = new THREE.PlaneGeometry(0.34, 0.34);
+    const facePlaneMat = new THREE.MeshBasicMaterial({
+      map: this.faceTextures.neutral,
+      transparent: true,
+      depthWrite: false,
     });
+    const facePlane = new THREE.Mesh(facePlaneGeo, facePlaneMat);
+    facePlane.position.set(0, 0.01, 0.278);
+    headGroup.add(facePlane);
 
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.036, 10, 10), skinMat);
-    nose.position.set(0, -0.015, 0.28);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.034, 10, 10), skinMat);
+    nose.position.set(0, -0.01, 0.29);
     headGroup.add(nose);
 
     const mustacheMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(0.19, 0.04, 0.05),
+      new THREE.BoxGeometry(0.18, 0.036, 0.05),
       new THREE.MeshStandardMaterial({ color: 0x374151, roughness: 0.8 }),
     );
-    mustacheMesh.position.set(0, -0.08, 0.265);
+    mustacheMesh.position.set(0, -0.062, 0.275);
     headGroup.add(mustacheMesh);
 
     const bindiMesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.022, 8, 8),
       new THREE.MeshBasicMaterial({ color: 0xdc2626 }),
     );
-    bindiMesh.position.set(0, 0.095, 0.27);
+    bindiMesh.position.set(0, 0.1, 0.28);
     headGroup.add(bindiMesh);
 
     const glassesGroup = new THREE.Group();
     const frameMat = new THREE.MeshStandardMaterial({
       color: 0xfbbf24,
-      metalness: 0.9,
-      roughness: 0.2,
+      metalness: 0.92,
+      roughness: 0.18,
     });
-    [-0.095, 0.095].forEach((gx) => {
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.056, 0.009, 8, 18), frameMat);
-      rim.position.set(gx, 0.035, 0.27);
+    [-0.088, 0.088].forEach((gx) => {
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.054, 0.009, 8, 18), frameMat);
+      rim.position.set(gx, 0.032, 0.282);
       glassesGroup.add(rim);
     });
     headGroup.add(glassesGroup);
@@ -1524,6 +2070,7 @@ export class TapriScene3D {
       new THREE.MeshStandardMaterial({ color: 0xfafaf9, roughness: 0.85 }),
     );
     gandhiCap.position.set(0, 0.25, 0);
+    gandhiCap.castShadow = true;
     headGroup.add(gandhiCap);
 
     const turbanGroup = new THREE.Group();
@@ -1533,17 +2080,25 @@ export class TapriScene3D {
     );
     turbanMain.rotation.x = Math.PI / 2 - 0.2;
     turbanMain.position.set(0, 0.19, 0);
+    turbanMain.castShadow = true;
     turbanGroup.add(turbanMain);
     headGroup.add(turbanGroup);
 
-    root.add(headGroup);
+    torsoGroup.add(headGroup);
     this.addContactShadow(root, 0.42, 0.02);
 
     return {
       root,
+      torsoGroup,
       headGroup,
+      facePlaneMat,
+      currentExpression: 'neutral',
       leftArm,
+      leftElbow,
+      leftHand,
       rightArm,
+      rightElbow,
+      rightHand,
       leftLeg,
       rightLeg,
       heldCupGroup,
@@ -1557,6 +2112,66 @@ export class TapriScene3D {
       turbanGroup,
       palluMesh,
     };
+  }
+
+  private setRigFacialExpression(rig: CharacterRig, expr: FacialExpression): void {
+    if (rig.currentExpression === expr) return;
+    rig.currentExpression = expr;
+    rig.facePlaneMat.map = this.faceTextures[expr];
+    rig.facePlaneMat.needsUpdate = true;
+  }
+
+  /**
+   * Analytical 2-Bone Inverse Kinematics (IK) Solver for the Chef's Arms:
+   * Rotates shoulder (leftArm / rightArm) and elbow (leftElbow / rightElbow)
+   * so the 3D hand reaches cleanly toward the active station on the counter!
+   */
+  private applyTwoBoneArmIK(
+    rig: CharacterRig,
+    isLeft: boolean,
+    targetWorldPos: THREE.Vector3,
+    blend: number,
+  ): void {
+    const shoulder = isLeft ? rig.leftArm : rig.rightArm;
+    const elbow = isLeft ? rig.leftElbow : rig.rightElbow;
+
+    if (blend <= 0.01) {
+      return;
+    }
+
+    // Compute vector from shoulder world position to target world position
+    const shoulderWorldPos = new THREE.Vector3();
+    shoulder.getWorldPosition(shoulderWorldPos);
+
+    const dx = targetWorldPos.x - shoulderWorldPos.x;
+    const dy = targetWorldPos.y - shoulderWorldPos.y;
+    const dz = Math.max(0.15, targetWorldPos.z - shoulderWorldPos.z);
+
+    const upperLen = 0.28;
+    const lowerLen = 0.28;
+    const maxReach = upperLen + lowerLen - 0.02;
+    const dist = Math.min(maxReach, Math.max(0.12, Math.hypot(dx, dy, dz)));
+
+    // Law of Cosines for Elbow Bend Angle
+    const cosKnee = THREE.MathUtils.clamp(
+      (upperLen * upperLen + lowerLen * lowerLen - dist * dist) /
+        (2 * upperLen * lowerLen),
+      -1,
+      1,
+    );
+    const elbowBend = -(Math.PI - Math.acos(cosKnee));
+
+    // Shoulder Pitch (reaching forward toward counter) & Roll (reaching across X)
+    const forwardAngle = -Math.atan2(dz, -dy) - (Math.PI - Math.acos(cosKnee)) * 0.42;
+    const sideAngle = THREE.MathUtils.clamp(
+      Math.atan2(dx, Math.hypot(dy, dz)) * 0.85,
+      -0.85,
+      0.85,
+    );
+
+    shoulder.rotation.x = THREE.MathUtils.lerp(shoulder.rotation.x, forwardAngle, blend);
+    shoulder.rotation.z = THREE.MathUtils.lerp(shoulder.rotation.z, sideAngle, blend);
+    elbow.rotation.x = THREE.MathUtils.lerp(elbow.rotation.x, elbowBend * 0.75, blend);
   }
 
   private applyAppearanceToRig(rig: CharacterRig, appearance: CustomerAppearance): void {
@@ -1574,27 +2189,26 @@ export class TapriScene3D {
   }
 
   private buildTeaMakerAndCustomers(): void {
-    // 1. Tea Maker (Chaiwala) standing behind the counter, completely unobstructed!
+    // 1. Tea Maker (Chaiwala) standing behind the counter
     this.teaMakerRig = this.createCharacterRig();
     this.applyAppearanceToRig(this.teaMakerRig, {
       skinColor: '#d4946a',
-      outfitPrimary: '#fffbeb',   // Crisp cream kurta
-      outfitSecondary: '#b91c1c', // Classic red gamcha scarf
+      outfitPrimary: '#fffbeb',
+      outfitSecondary: '#b91c1c',
       headwear: 'gandhi_cap',
       glasses: false,
       mustache: true,
       bindi: false,
     });
     this.teaMakerRig.palluMesh.visible = true;
-    this.teaMakerRig.root.position.set(0, 0.14, -0.95);
+    this.teaMakerRig.root.position.set(0, 0.14, -0.92);
     this.scene.add(this.teaMakerRig.root);
 
     // 2. Active Customer walking in from the right footpath & waiting at the Serving Counter
     this.activeCustomerRig = this.createCharacterRig();
     this.activeCustomerRig.root.position.set(1.95, 0.1, -0.78);
-    this.activeCustomerRig.root.rotation.y = -0.35; // Faces camera & slightly toward Tea Maker
+    this.activeCustomerRig.root.rotation.y = -0.35;
 
-    // Interactive hitbox on Active Customer so clicking them serves tea when ready
     const custProxy = new THREE.Mesh(
       new THREE.BoxGeometry(0.95, 2.1, 0.95),
       new THREE.MeshBasicMaterial({ visible: false }),
@@ -1612,14 +2226,13 @@ export class TapriScene3D {
     this.queuedCustomerRig.root.rotation.y = -0.45;
     this.scene.add(this.queuedCustomerRig.root);
 
-    // 4. Departing Served Customer (takes their steaming Kulhad cup and walks off happily!)
+    // 4. Departing Served Customer
     this.departingCustomerRig = this.createCharacterRig();
     this.departingCustomerRig.heldCupGroup.visible = true;
     this.departingCustomerRig.root.visible = false;
     this.scene.add(this.departingCustomerRig.root);
   }
 
-  // ZERO-GC POOLED PARTICLE RING BUFFER + MONSOON RAIN
   private buildParticlePools(): void {
     const pGeo = new THREE.SphereGeometry(0.055, 8, 8);
     const pMat = new THREE.MeshBasicMaterial({
@@ -1681,12 +2294,11 @@ export class TapriScene3D {
     this.rainInstanced.instanceMatrix.needsUpdate = true;
     this.scene.add(this.rainInstanced);
 
-    // Floating Golden Dust Motes illuminated by the hanging tapri bulb
     const moteGeo = new THREE.SphereGeometry(0.028, 6, 6);
     const moteMat = new THREE.MeshBasicMaterial({
       color: 0xfef08a,
       transparent: true,
-      opacity: 0.62,
+      opacity: 0.68,
     });
     this.dustMoteInstanced = new THREE.InstancedMesh(moteGeo, moteMat, this.dustMoteCount);
     this.dustMoteInstanced.frustumCulled = false;
@@ -1737,7 +2349,6 @@ export class TapriScene3D {
     }
   }
 
-  // Slow-rising, gentle steam particle system for simmering & poured chai
   public spawnGentleSteam(x: number, y: number, z: number): void {
     const slot = this.particles[this.particleIndex];
     this.particleIndex = (this.particleIndex + 1) % this.particleCount;
@@ -1746,7 +2357,7 @@ export class TapriScene3D {
     slot.y = y;
     slot.z = z + (Math.random() - 0.5) * 0.24;
     slot.vx = (Math.random() - 0.5) * 0.12;
-    slot.vy = 0.42 + Math.random() * 0.22; // Slow, unhurried rising steam
+    slot.vy = 0.42 + Math.random() * 0.22;
     slot.vz = (Math.random() - 0.5) * 0.12;
     slot.age = 0;
     slot.maxAge = 1.65 + Math.random() * 0.55;
@@ -1758,9 +2369,12 @@ export class TapriScene3D {
   public triggerMortarPoundEffect(crushCount: number): void {
     this.mortarCrushAnim = 1.0;
     this.mortarWobble = 1.0;
-    this.teaMakerWorkTimer = 0.6;
-    this.cameraTrauma = Math.min(0.32, this.cameraTrauma + 0.12);
-    this.hitstopTimer = 0.035;
+    this.teaMakerWorkTimer = 0.95;
+    this.teaMakerActiveStation = 1;
+    this.ikLeftTargetGoal.set(-2.22, 1.38, 0.28);
+    this.ikRightTargetGoal.set(-1.95, 1.62, 0.32);
+    this.cameraTrauma = Math.min(0.32, this.cameraTrauma + 0.1);
+    this.hitstopTimer = 0.03;
     this.spawnParticles(
       -2.05,
       1.52,
@@ -1774,23 +2388,36 @@ export class TapriScene3D {
 
   public triggerPotSplashEffect(colorHex: number): void {
     this.potSimmerBounce = 1.0;
-    this.teaMakerWorkTimer = 0.6;
+    this.teaMakerWorkTimer = 0.95;
+    this.teaMakerActiveStation = 2;
+    this.ikLeftTargetGoal.set(-0.38, 1.52, 0.24);
+    this.ikRightTargetGoal.set(0.38, 1.58, 0.28);
     this.spawnParticles(0, 1.65, 0.26, 10, colorHex, 0.9, 1.4);
   }
 
-  public triggerTrayActionEffect(isPour: boolean): void {
+  public triggerTrayActionEffect(isPour: boolean, isPerfectPour = false): void {
     if (isPour) {
       this.pourAnimTimer = 0.65;
     }
-    this.teaMakerWorkTimer = 0.6;
+    this.teaMakerWorkTimer = 0.95;
+    this.teaMakerActiveStation = 3;
+    if (isPerfectPour) {
+      this.teaMakerHappyTimer = 2.4;
+    }
+    this.ikLeftTargetGoal.set(1.65, 1.42, 0.32);
+    this.ikRightTargetGoal.set(2.15, 1.48, 0.36);
     this.spawnParticles(2.05, 1.45, 0.34, 10, isPour ? 0xfde68a : 0xf59e0b, 1.0, 1.2);
   }
 
   public triggerServeCelebration(): void {
     this.trayServeSlide = 1.0;
-    this.teaMakerWorkTimer = 0.8;
-    this.cameraTrauma = 0.2;
-    this.hitstopTimer = 0.045;
+    this.teaMakerWorkTimer = 1.1;
+    this.teaMakerHappyTimer = 2.8;
+    this.teaMakerActiveStation = 3;
+    this.ikLeftTargetGoal.set(1.75, 1.45, 0.35);
+    this.ikRightTargetGoal.set(2.25, 1.45, 0.35);
+    this.cameraTrauma = 0.18;
+    this.hitstopTimer = 0.04;
     this.spawnParticles(1.95, 1.95, -0.45, 22, 0xfacc15, 1.8, 2.0);
 
     this.flyingCoins.forEach((fc, idx) => {
@@ -1806,14 +2433,39 @@ export class TapriScene3D {
   }
 
   public triggerSpillSplashEffect(): void {
-    this.cameraTrauma = 0.26;
+    this.cameraTrauma = 0.24;
+    this.teaMakerSurpriseTimer = 1.8;
     this.spawnParticles(1.32, 1.22, 0.56, 18, 0xb45309, 1.5, 1.3);
   }
 
   public triggerWipeCleanEffect(): void {
-    this.wipeAnimTimer = 0.55;
-    this.teaMakerWorkTimer = 0.6;
+    this.wipeAnimTimer = 0.65;
+    this.teaMakerWorkTimer = 0.9;
+    this.teaMakerActiveStation = 'spill';
+    this.ikLeftTargetGoal.set(1.12, 1.22, 0.48);
+    this.ikRightTargetGoal.set(1.42, 1.22, 0.56);
     this.spawnParticles(1.32, 1.22, 0.56, 14, 0xfef08a, 1.2, 1.1);
+  }
+
+  /**
+   * Projects a 3D world point into 0..100% viewport coordinates for World-Space UI
+   */
+  private projectWorldPoint(x: number, y: number, z: number): ScreenAnchorPoint {
+    this._projVec.set(x, y, z).project(this.camera);
+    const sx = THREE.MathUtils.clamp((this._projVec.x * 0.5 + 0.5) * 100, 6, 94);
+    const sy = THREE.MathUtils.clamp((-this._projVec.y * 0.5 + 0.5) * 100, 8, 92);
+    return { x: Math.round(sx * 10) / 10, y: Math.round(sy * 10) / 10 };
+  }
+
+  public getProjectedAnchors(): WorldScreenAnchors {
+    return {
+      mortar: this.projectWorldPoint(-2.05, 0.88, 1.05),
+      stove: this.projectWorldPoint(0.0, 0.88, 1.05),
+      tray: this.projectWorldPoint(2.05, 0.88, 1.05),
+      radio: this.projectWorldPoint(-3.15, 2.08, -0.22),
+      customer: this.projectWorldPoint(1.95, 2.65, -0.78),
+      spill: this.projectWorldPoint(1.32, 1.52, 0.56),
+    };
   }
 
   public syncGameState(
@@ -1822,16 +2474,15 @@ export class TapriScene3D {
   ): void {
     this.mode = shellMode;
 
-    // 1. Update Customer Queue & Walking Transition when a new customer arrives
     if (state.currentCustomer.id !== this.lastCustomerId) {
       if (this.lastCustomerId !== '') {
-        // Previous customer takes their tea cup and walks off happily!
         const prevOrder = generateCustomerOrder(
           Math.max(0, state.currentCustomer.customerIndex - 1),
           state.radioEvent,
           state.unlockedUpgrades,
         );
         this.applyAppearanceToRig(this.departingCustomerRig, prevOrder.appearance);
+        this.setRigFacialExpression(this.departingCustomerRig, 'happy');
         this.departingCustomerRig.root.visible = true;
         this.departingWalkProgress = 0;
         this.activeWalkProgress = 0;
@@ -1849,7 +2500,7 @@ export class TapriScene3D {
     );
     this.applyAppearanceToRig(this.queuedCustomerRig, nextQueuedOrder.appearance);
 
-    // 2. Update Station 1 Mortar & Pestle
+    // Update Station 1 Mortar & Pestle
     const crushRatio = state.station.crushCount / 3;
     this.spiceFillMesh.scale.y = 0.3 + crushRatio * 1.4;
     this.spiceFillMesh.position.y = 0.15 + crushRatio * 0.08;
@@ -1865,7 +2516,7 @@ export class TapriScene3D {
       chunk.visible = i >= state.station.crushCount;
     });
 
-    // 3. Update Station 2 Stove & Patila Liquid Color + Height
+    // Update Station 2 Stove & Patila Liquid Color + Height
     const st = state.station;
     const anyLiquid =
       st.waterAdded || st.teaLeavesAdded || st.milkOrLemonAdded || st.spicesInPot;
@@ -1892,7 +2543,7 @@ export class TapriScene3D {
       );
     }
 
-    // 4. Update Station 3 Serving Tray (Cup + Snack + Counter Spill State)
+    // Update Station 3 Serving Tray
     const activeCup = st.pouredCup ?? state.currentCustomer.cup;
     this.kulhadGroup.visible = activeCup === 'kulhad';
     this.cuttingGlassGroup.visible = activeCup === 'cutting_glass';
@@ -1904,7 +2555,7 @@ export class TapriScene3D {
     this.snackPakoraGroup.visible = st.platedSnack === 'pakora';
     this.snackMithaiGroup.visible = st.platedSnack === 'mithai';
 
-    // 5. Update Unlocked 3D Upgrades
+    // Update Unlocked 3D Upgrades
     this.royalCrownGroup.visible =
       state.unlockedUpgrades.includes('brass_teapot') ||
       state.unlockedUpgrades.includes('larger_kettle');
@@ -1912,7 +2563,7 @@ export class TapriScene3D {
       state.unlockedUpgrades.includes('marigold_lights') || state.radioEvent === 'diwali';
     this.counterSamosaDisplay.visible = state.unlockedUpgrades.includes('samosa');
 
-    // 6. Update Coin Gullak Fill
+    // Update Coin Gullak Fill
     const visibleCoins = Math.min(
       this.gullakCoinMeshes.length,
       Math.max(2, Math.floor(state.coins / 10)),
@@ -1921,22 +2572,42 @@ export class TapriScene3D {
       c.visible = idx < visibleCoins;
     });
 
-    // 7. Update Active Guide Ring & Tea Maker Target Position
-    if (st.crushCount < 3) {
+    // Update Active Guide Ring, Tea Maker Position & Default IK Hand Targets
+    if (st.hasSpillOnCounter) {
+      this.guideRingTargetX = 1.32;
+      this.guideRingTargetZ = 0.56;
+      this.teaMakerTargetX = 0.95;
+      this.teaMakerActiveStation = 'spill';
+      this.ikLeftTargetGoal.set(1.12, 1.24, 0.46);
+      this.ikRightTargetGoal.set(1.42, 1.24, 0.52);
+    } else if (st.crushCount < 3) {
       this.guideRingTargetX = -2.05;
       this.guideRingTargetZ = 0.32;
-      this.teaMakerTargetX = -1.35;
+      this.teaMakerTargetX = -1.42;
+      this.teaMakerActiveStation = 1;
+      this.ikLeftTargetGoal.set(-2.22, 1.35, 0.25);
+      this.ikRightTargetGoal.set(-1.95, 1.56, 0.3);
     } else if (!st.isBoiled) {
       this.guideRingTargetX = 0.0;
       this.guideRingTargetZ = 0.26;
-      this.teaMakerTargetX = -0.15;
+      this.teaMakerTargetX = -0.05;
+      this.teaMakerActiveStation = 2;
+      this.ikLeftTargetGoal.set(-0.38, 1.48, 0.22);
+      this.ikRightTargetGoal.set(0.38, 1.48, 0.22);
     } else {
       this.guideRingTargetX = 2.05;
       this.guideRingTargetZ = 0.34;
-      this.teaMakerTargetX = 0.72;
+      this.teaMakerTargetX = 1.25;
+      this.teaMakerActiveStation = 3;
+      this.ikLeftTargetGoal.set(1.65, 1.36, 0.28);
+      this.ikRightTargetGoal.set(2.15, 1.38, 0.32);
     }
 
-    // 8. Update Weather & Atmosphere for Radio Event
+    if (st.pourQuality === 'perfect' && this.teaMakerHappyTimer <= 0) {
+      this.teaMakerHappyTimer = 1.8;
+    }
+
+    // Update Weather & Atmosphere for Radio Event
     if (this.currentRadioEvent !== state.radioEvent) {
       this.currentRadioEvent = state.radioEvent;
       this.applyRadioAtmosphere(state.radioEvent);
@@ -1951,27 +2622,27 @@ export class TapriScene3D {
       bg.setHex(0x7c98ab);
       fog.color.setHex(0x7c98ab);
       this.keyLight.color.setHex(0xdbeafe);
-      this.keyLight.intensity = 1.65;
+      this.keyLight.intensity = 1.25;
       this.rainInstanced.visible = true;
     } else if (event === 'diwali') {
       bg.setHex(0xd97736);
       fog.color.setHex(0xd97736);
       this.keyLight.color.setHex(0xffedd5);
-      this.keyLight.intensity = 2.1;
-      this.festivalLight.intensity = 2.6;
+      this.keyLight.intensity = 1.45;
+      this.festivalLight.intensity = 1.75;
       this.rainInstanced.visible = false;
     } else if (event === 'milkman_delayed') {
       bg.setHex(0xf7d08a);
       fog.color.setHex(0xf7d08a);
       this.keyLight.color.setHex(0xfffbeb);
-      this.keyLight.intensity = 2.35;
+      this.keyLight.intensity = 1.6;
       this.rainInstanced.visible = false;
     } else {
       bg.setHex(0xf6c28b);
       fog.color.setHex(0xf6c28b);
       this.keyLight.color.setHex(0xffe0b2);
-      this.keyLight.intensity = 2.3;
-      this.festivalLight.intensity = 1.5;
+      this.keyLight.intensity = 1.55;
+      this.festivalLight.intensity = 1.25;
       this.rainInstanced.visible = false;
     }
   }
@@ -1992,7 +2663,6 @@ export class TapriScene3D {
   private computeCameraTargets(elapsed: number): void {
     const aspect = this.camera.aspect || 1.5;
     const halfFovTan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5));
-    // Ensure full 8.5-unit tabletop & customer span (-4.25 to +4.25) at the front plane (z = +0.90) fits inside any screen width
     const minDistFromFrontPlane = 4.25 / (halfFovTan * Math.max(0.36, aspect));
     const baseDistZ = Math.max(5.55, 0.9 + minDistFromFrontPlane);
     const isPortrait = aspect < 1.05;
@@ -2011,12 +2681,12 @@ export class TapriScene3D {
     } else {
       this.cameraPosTarget.set(
         this.pointerNormalized.x * (isPortrait ? 0.06 : 0.18),
-        (isPortrait ? 0.8 + baseDistZ * 0.31 : 3.35) + this.pointerNormalized.y * 0.05,
+        (isPortrait ? 0.82 + baseDistZ * 0.31 : 3.35) + this.pointerNormalized.y * 0.05,
         baseDistZ,
       );
       this.cameraLookTarget.set(
         this.pointerNormalized.x * 0.05,
-        isPortrait ? 0.22 : 0.88,
+        isPortrait ? 0.55 : 1.02,
         -0.15,
       );
     }
@@ -2056,13 +2726,25 @@ export class TapriScene3D {
     }
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, true);
+    if (this.composer) {
+      this.composer.setSize(width, height);
+    }
+    if (this.bloomPass) {
+      this.bloomPass.resolution.set(width, height);
+    }
+    if (this.dofGrainPass) {
+      this.dofGrainPass.uniforms.uResolution.value.set(width, height);
+    }
 
-    // Snap camera immediately on resize so mobile Chrome & tablets frame the full stall on Frame 1
     this.computeCameraTargets(this.clock.getElapsedTime());
     this.cameraPosCurrent.copy(this.cameraPosTarget);
     this.cameraLookCurrent.copy(this.cameraLookTarget);
     this.camera.position.copy(this.cameraPosCurrent);
     this.camera.lookAt(this.cameraLookCurrent);
+
+    if (this.onWorldStateChange) {
+      this.onWorldStateChange(this.getProjectedAnchors(), this.hoveredStation);
+    }
   };
 
   private handlePointerMove = (e: PointerEvent): void => {
@@ -2086,6 +2768,11 @@ export class TapriScene3D {
     } else {
       this.hoveredStation = null;
       this.renderer.domElement.style.cursor = 'default';
+    }
+
+    if (this.hoveredStation !== this.lastEmittedHovered && this.onWorldStateChange) {
+      this.lastEmittedHovered = this.hoveredStation;
+      this.onWorldStateChange(this.getProjectedAnchors(), this.hoveredStation);
     }
   };
 
@@ -2136,7 +2823,16 @@ export class TapriScene3D {
       const elapsed = this.clock.getElapsedTime();
 
       this.updateScene(dt, elapsed);
-      this.renderer.render(this.scene, this.camera);
+
+      if (this.dofGrainPass) {
+        this.dofGrainPass.uniforms.uTime.value = elapsed;
+      }
+
+      if (this.composer) {
+        this.composer.render();
+      } else {
+        this.renderer.render(this.scene, this.camera);
+      }
 
       if (this.isSoftwareGl) {
         this.afterDraw(tick);
@@ -2160,7 +2856,11 @@ export class TapriScene3D {
       rig.leftLeg.rotation.x = stride;
       rig.rightLeg.rotation.x = -stride;
       rig.leftArm.rotation.x = -stride * 0.7;
+      rig.leftArm.rotation.z = 0;
+      rig.leftElbow.rotation.x = -0.25;
       rig.rightArm.rotation.x = isHoldingCup ? -0.85 : stride * 0.7;
+      rig.rightArm.rotation.z = 0;
+      rig.rightElbow.rotation.x = isHoldingCup ? -0.65 : -0.25;
       rig.root.position.y = 0.02 + Math.abs(Math.cos(walkSpeedPhase)) * 0.06;
     } else {
       rig.leftLeg.rotation.x = 0;
@@ -2168,14 +2868,22 @@ export class TapriScene3D {
       rig.root.position.y = 0.02 + Math.sin(elapsed * 2.4) * 0.02;
 
       if (isWorkingOrWaving) {
-        rig.rightArm.rotation.x = -0.75 + Math.sin(elapsed * 12) * 0.35;
-        rig.leftArm.rotation.x = -0.45 + Math.cos(elapsed * 12) * 0.25;
+        rig.rightArm.rotation.x = -0.85 + Math.sin(elapsed * 12) * 0.25;
+        rig.leftArm.rotation.x = -0.65 + Math.cos(elapsed * 12) * 0.2;
+        rig.rightElbow.rotation.x = -0.55;
+        rig.leftElbow.rotation.x = -0.45;
       } else if (isHoldingCup) {
-        rig.rightArm.rotation.x = -0.95 + Math.sin(elapsed * 3) * 0.1;
+        rig.rightArm.rotation.x = -0.95 + Math.sin(elapsed * 3) * 0.08;
+        rig.rightElbow.rotation.x = -0.65;
         rig.leftArm.rotation.x = 0;
+        rig.leftElbow.rotation.x = -0.15;
       } else {
         rig.rightArm.rotation.x = Math.sin(elapsed * 1.8) * 0.06;
         rig.leftArm.rotation.x = -Math.sin(elapsed * 1.8) * 0.06;
+        rig.rightArm.rotation.z = 0;
+        rig.leftArm.rotation.z = 0;
+        rig.rightElbow.rotation.x = -0.15;
+        rig.leftElbow.rotation.x = -0.15;
       }
     }
 
@@ -2189,7 +2897,7 @@ export class TapriScene3D {
     }
     const simDt = this.hitstopTimer > 0 ? dt * 0.15 : dt;
 
-    // 1. Responsive Camera Choreography (Fits full 8.5-unit counter on portrait phones, tablets & desktops)
+    // 1. Responsive Camera Choreography
     const dampFactor = 1 - Math.exp(-5.5 * dt);
     this.computeCameraTargets(elapsed);
 
@@ -2211,6 +2919,12 @@ export class TapriScene3D {
       this.cameraPosCurrent.z,
     );
     this.camera.lookAt(this.cameraLookCurrent);
+
+    // Emit updated projected world-space anchors periodically (~12Hz)
+    if (this.onWorldStateChange && elapsed - this.lastAnchorEmitTime > 0.085) {
+      this.lastAnchorEmitTime = elapsed;
+      this.onWorldStateChange(this.getProjectedAnchors(), this.hoveredStation);
+    }
 
     // 2. Guide Ring & Soft Glowing Hover Ring Interpolation
     this.guideRingMesh.position.x = THREE.MathUtils.lerp(
@@ -2243,6 +2957,9 @@ export class TapriScene3D {
       } else if (this.hoveredStation === 'station_radio') {
         hx = -3.15;
         hz = -0.22;
+      } else if (this.hoveredStation === 'station_spill') {
+        hx = 1.32;
+        hz = 0.56;
       }
       this.hoverRingMesh.position.x = hx;
       this.hoverRingMesh.position.z = hz;
@@ -2251,29 +2968,95 @@ export class TapriScene3D {
       this.hoverRingMesh.visible = false;
     }
 
-    // 3. Tea Maker (Chaiwala) Movement & Working Animation behind the counter
+    // 3. Tea Maker (Chaiwala) Movement, 2-Bone IK Reaching & Face Texture-Swapping
     if (this.teaMakerWorkTimer > 0) {
       this.teaMakerWorkTimer = Math.max(0, this.teaMakerWorkTimer - simDt);
     }
+    if (this.teaMakerHappyTimer > 0) {
+      this.teaMakerHappyTimer = Math.max(0, this.teaMakerHappyTimer - simDt);
+    }
+    if (this.teaMakerSurpriseTimer > 0) {
+      this.teaMakerSurpriseTimer = Math.max(0, this.teaMakerSurpriseTimer - simDt);
+    }
+
     const prevTeaMakerX = this.teaMakerRig.root.position.x;
     this.teaMakerRig.root.position.x = THREE.MathUtils.lerp(
       prevTeaMakerX,
       this.teaMakerTargetX,
-      dampFactor * 1.2,
+      dampFactor * 1.35,
     );
-    const teaMakerWalking = Math.abs(this.teaMakerRig.root.position.x - this.teaMakerTargetX) > 0.06;
+    const teaMakerWalking =
+      Math.abs(this.teaMakerRig.root.position.x - this.teaMakerTargetX) > 0.06;
+
     this.animateCharacterWalkAndIdle(
       this.teaMakerRig,
       teaMakerWalking,
       elapsed * 10,
       elapsed,
-      this.teaMakerWorkTimer > 0,
+      false,
       false,
     );
-    this.teaMakerRig.root.position.y += 0.12; // Stand on raised tapri platform
+    this.teaMakerRig.root.position.y += 0.12;
 
-    // 4. Customers Walking In, Waiting at the Counter & Taking the Tea!
-    // 4A. Active Customer walks from queued spot (+3.05, -0.88) to counter serving spot (+1.95, -0.78)
+    // 3A. Apply 2-Bone IK to Chef's Arms so hands physically reach Mortar, Stove, Tray, or Spill
+    const targetIkBlend = this.mode === 'playing' ? (this.teaMakerWorkTimer > 0 ? 0.96 : 0.72) : 0.0;
+    this.ikBlendCurrent = THREE.MathUtils.lerp(this.ikBlendCurrent, targetIkBlend, dampFactor * 1.8);
+
+    // Add lively procedural hand motion on top of the IK goal when actively crushing/stirring/wiping
+    const workWave = this.teaMakerWorkTimer > 0 ? Math.sin(elapsed * 18) * 0.12 : Math.sin(elapsed * 2.5) * 0.025;
+    const dynamicLeftGoal = this.ikLeftTargetGoal.clone();
+    const dynamicRightGoal = this.ikRightTargetGoal.clone();
+    if (this.teaMakerActiveStation === 1) {
+      dynamicRightGoal.y += workWave * 1.4; // Pounding pestle up and down
+    } else if (this.teaMakerActiveStation === 2) {
+      dynamicRightGoal.x += workWave; // Stirring patila
+      dynamicLeftGoal.x -= workWave * 0.5;
+    } else if (this.teaMakerActiveStation === 'spill') {
+      dynamicRightGoal.x += Math.sin(elapsed * 24) * 0.25; // Scrubbing counter with wipe cloth
+    } else {
+      dynamicRightGoal.y += workWave * 0.6;
+    }
+
+    this.ikLeftTargetCurrent.lerp(dynamicLeftGoal, dampFactor * 2.2);
+    this.ikRightTargetCurrent.lerp(dynamicRightGoal, dampFactor * 2.2);
+
+    this.applyTwoBoneArmIK(this.teaMakerRig, true, this.ikLeftTargetCurrent, this.ikBlendCurrent);
+    this.applyTwoBoneArmIK(this.teaMakerRig, false, this.ikRightTargetCurrent, this.ikBlendCurrent);
+
+    // Subtle torso lean forward toward the counter when reaching via IK
+    this.teaMakerRig.torsoGroup.rotation.x = THREE.MathUtils.lerp(
+      this.teaMakerRig.torsoGroup.rotation.x,
+      this.ikBlendCurrent * 0.16,
+      dampFactor,
+    );
+
+    // 3B. Procedural Face Texture-Swapping (Blinking, Smiling on Perfect Pour, Focused, Surprised)
+    const isBlinkWindow = (elapsed % 3.4) > 3.25;
+    if (this.teaMakerSurpriseTimer > 0) {
+      this.setRigFacialExpression(this.teaMakerRig, 'surprised');
+    } else if (this.teaMakerHappyTimer > 0) {
+      this.setRigFacialExpression(this.teaMakerRig, 'happy');
+    } else if (isBlinkWindow) {
+      this.setRigFacialExpression(this.teaMakerRig, 'blink');
+    } else if (this.teaMakerWorkTimer > 0) {
+      this.setRigFacialExpression(this.teaMakerRig, 'focused');
+    } else {
+      this.setRigFacialExpression(this.teaMakerRig, 'neutral');
+    }
+
+    // Active Customer Face Texture-Swapping
+    const custBlinkWindow = ((elapsed + 1.4) % 3.8) > 3.65;
+    if (this.teaMakerHappyTimer > 0) {
+      this.setRigFacialExpression(this.activeCustomerRig, 'happy');
+    } else if (this.teaMakerSurpriseTimer > 0) {
+      this.setRigFacialExpression(this.activeCustomerRig, 'surprised');
+    } else if (custBlinkWindow) {
+      this.setRigFacialExpression(this.activeCustomerRig, 'blink');
+    } else {
+      this.setRigFacialExpression(this.activeCustomerRig, 'neutral');
+    }
+
+    // 4. Customers Walking In, Waiting at the Counter & Taking the Tea
     if (this.activeWalkProgress < 1) {
       this.activeWalkProgress = Math.min(1, this.activeWalkProgress + simDt * 1.15);
     }
@@ -2282,7 +3065,7 @@ export class TapriScene3D {
     this.activeCustomerRig.root.position.x = activeX;
     this.activeCustomerRig.root.position.z = activeZ;
     this.activeCustomerRig.root.rotation.y =
-      this.activeWalkProgress < 0.92 ? -1.15 : -0.35; // Walks left toward counter, then faces counter & camera!
+      this.activeWalkProgress < 0.92 ? -1.15 : -0.35;
     this.animateCharacterWalkAndIdle(
       this.activeCustomerRig,
       this.activeWalkProgress < 0.96,
@@ -2293,7 +3076,6 @@ export class TapriScene3D {
     );
     this.activeCustomerRig.root.position.y += 0.08;
 
-    // 4B. Queued Customer walks in from right roadside (+5.2, -0.95) to queue spot (+3.05, -0.88)
     if (this.queuedWalkProgress < 1) {
       this.queuedWalkProgress = Math.min(1, this.queuedWalkProgress + simDt * 0.95);
     }
@@ -2313,40 +3095,36 @@ export class TapriScene3D {
     );
     this.queuedCustomerRig.root.position.y += 0.06;
 
-    // 4C. Departing Served Customer takes the tea at the Serving Tray and walks off happily holding their Kulhad!
     if (this.departingCustomerRig.root.visible) {
       this.departingWalkProgress += simDt * 0.55;
       if (this.departingWalkProgress >= 1) {
         this.departingCustomerRig.root.visible = false;
+      } else if (this.departingWalkProgress < 0.28) {
+        this.departingCustomerRig.root.position.set(1.45, 0.1, -0.75);
+        this.departingCustomerRig.root.rotation.y = 0.15;
+        this.animateCharacterWalkAndIdle(
+          this.departingCustomerRig,
+          false,
+          0,
+          elapsed,
+          false,
+          true,
+        );
+        this.departingCustomerRig.root.position.y += 0.08;
       } else {
-        // First 0.28 of progress: stands right by Serving Tray holding & sipping their Kulhad cup, then walks off!
-        if (this.departingWalkProgress < 0.28) {
-          this.departingCustomerRig.root.position.set(1.45, 0.1, -0.75);
-          this.departingCustomerRig.root.rotation.y = 0.15;
-          this.animateCharacterWalkAndIdle(
-            this.departingCustomerRig,
-            false,
-            0,
-            elapsed,
-            false,
-            true,
-          );
-          this.departingCustomerRig.root.position.y += 0.08;
-        } else {
-          const walkT = (this.departingWalkProgress - 0.28) / 0.72;
-          this.departingCustomerRig.root.position.x = THREE.MathUtils.lerp(1.45, 5.4, walkT);
-          this.departingCustomerRig.root.position.z = THREE.MathUtils.lerp(-0.75, -0.65, walkT);
-          this.departingCustomerRig.root.rotation.y = 1.15; // Walks away to the right holding tea cup
-          this.animateCharacterWalkAndIdle(
-            this.departingCustomerRig,
-            true,
-            elapsed * 9.0,
-            elapsed,
-            false,
-            true,
-          );
-          this.departingCustomerRig.root.position.y += 0.08;
-        }
+        const walkT = (this.departingWalkProgress - 0.28) / 0.72;
+        this.departingCustomerRig.root.position.x = THREE.MathUtils.lerp(1.45, 5.4, walkT);
+        this.departingCustomerRig.root.position.z = THREE.MathUtils.lerp(-0.75, -0.65, walkT);
+        this.departingCustomerRig.root.rotation.y = 1.15;
+        this.animateCharacterWalkAndIdle(
+          this.departingCustomerRig,
+          true,
+          elapsed * 9.0,
+          elapsed,
+          false,
+          true,
+        );
+        this.departingCustomerRig.root.position.y += 0.08;
       }
     }
 
@@ -2388,7 +3166,7 @@ export class TapriScene3D {
     }
 
     this.flameMeshes.forEach((flame, idx) => {
-      flame.scale.y = 0.85 + Math.sin(elapsed * 14 + idx) * 0.25;
+      flame.scale.y = 0.85 + Math.sin(elapsed * 14 + idx) * 0.28;
     });
 
     const showBubbles = this.liquidTargetHeight >= 0.39;
@@ -2540,7 +3318,6 @@ export class TapriScene3D {
       dampFactor,
     );
 
-    // Multilayered Parallax Street Shift
     this.parallaxFarGroup.position.x = THREE.MathUtils.lerp(
       this.parallaxFarGroup.position.x,
       -this.pointerNormalized.x * 0.65,
@@ -2591,6 +3368,9 @@ export class TapriScene3D {
     }
     window.removeEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
+    if (this.composer) {
+      this.composer.dispose();
+    }
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode === this.container) {
       this.container.removeChild(this.renderer.domElement);

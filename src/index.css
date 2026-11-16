@@ -49,10 +49,28 @@
   font-variant-numeric: tabular-nums;
 }
 
-.hud-stroke {
-  paint-order: stroke fill;
-  -webkit-text-stroke: 3px #231109;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
+/* Mobile & Tablet Safe-Area Padding with env(safe-area-inset-*) */
+.safe-area-hud {
+  padding-top: max(0.5rem, env(safe-area-inset-top, 0.5rem));
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0.75rem));
+  padding-left: max(0.6rem, env(safe-area-inset-left, 0.6rem));
+  padding-right: max(0.6rem, env(safe-area-inset-right, 0.6rem));
+}
+
+.safe-bottom-offset {
+  bottom: max(0.65rem, env(safe-area-inset-bottom, 0.65rem));
+}
+
+/* Frosted-Glass Pill Surface (High-performance translucent surface with specular inner border) */
+.frosted-pill {
+  background: linear-gradient(
+    145deg,
+    rgba(38, 18, 9, 0.86) 0%,
+    rgba(26, 12, 6, 0.92) 100%
+  );
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.52),
+    inset 0 1px 1px rgba(255, 251, 235, 0.25);
 }
 
 /* Continuous CSS-animated steam effect rising from the teacup on the Title Screen */
@@ -110,22 +128,6 @@
   animation: floatUpSlow 2.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
-/* Nostalgic Radio gentle scrolling marquee ticker */
-@keyframes radioMarquee {
-  0% {
-    transform: translateX(0%);
-  }
-  100% {
-    transform: translateX(-50%);
-  }
-}
-
-.radio-ticker-scroll {
-  display: inline-flex;
-  white-space: nowrap;
-  animation: radioMarquee 28s linear infinite;
-}
-
 /* Soft glowing hover outline for forgiving, accessible controls */
 .cozy-interactive-glow {
   transition:
@@ -141,4 +143,3 @@
     0 0 18px rgba(250, 204, 21, 0.65);
   border-color: #fde047;
 }
-
